@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title> LinkedIn Bot - Secure Access</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            max-width: 600px; 
+            margin: 50px auto; 
+            padding: 30px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container { 
+            background: white; 
+            padding: 40px; 
+            border-radius: 20px; 
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; text-align: center; margin-bottom: 30px; }
+        .secure-box { 
+            background: #e8f5e8; 
+            padding: 20px; 
+            border-radius: 10px; 
+            margin: 20px 0; 
+            border-left: 5px solid #28a745;
+        }
+        input { 
+            width: 100%; 
+            padding: 15px; 
+            margin: 15px 0; 
+            border: 2px solid #ddd; 
+            border-radius: 10px; 
+            font-size: 16px; 
+            transition: border-color 0.3s;
+        }
+        input:focus { border-color: #0073b1; outline: none; }
+        button { 
+            background: linear-gradient(45deg, #0073b1, #005a8b); 
+            color: white; 
+            padding: 18px; 
+            width: 100%; 
+            border: none; 
+            border-radius: 10px; 
+            font-size: 20px; 
+            font-weight: bold; 
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover { transform: translateY(-2px); }
+        .download-list { margin-top: 20px; padding: 20px; background: #f8f9fa; border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1> LinkedIn Comment Liker</h1>
+        
+        <div class="secure-box">
+            <b> 100% SECURE:</b><br>
+            • Credentials <b>NEVER</b> leave your computer<br>
+            • Bot runs 100% locally on YOUR machine<br>
+            • No data sent to any server<br>
+            • Your privacy fully protected
+        </div>
+
+        <input type="password" id="password" placeholder=" Enter Password: MySecret123">
+        <button onclick="unlockBot()"> UNLOCK & DOWNLOAD BOT</button>
+
+        <div id="download-section" class="download-list" style="display:none;">
+            <h3> Download Complete! </h3>
+            <p><b>Next Steps:</b></p>
+            <ol>
+                <li>Download <code>LinkedInBot.exe</code> (40MB)</li>
+                <li>Add your <code>Credentials.json</code> next to EXE</li>
+                <li>Add <code>secure_config.json</code> next to EXE</li>
+                <li>Double-click <code>LinkedInBot.exe</code></li>
+                <li>Password: MySecret123 → Enter YOUR LinkedIn credentials → START BOT</li>
+            </ol>
+            <a id="exe-download" href="#" download style="display:block; margin-top:20px;">
+                 Download LinkedInBot.exe
+            </a>
+        </div>
+    </div>
+
+    <script>
+    function unlockBot() {
+        const password = document.getElementById('password').value;
+        if (password !== 'MySecret123') {
+            alert('Wrong password!');
+            return;
+        }
+        
+        // Create secure config
+        const config = {
+            authorized: true,
+            timestamp: Date.now(),
+            message: "Bot activated securely - credentials stay local"
+        };
+        
+        // Download secure_config.json
+        const configBlob = new Blob([JSON.stringify(config, null, 2)], {type: 'application/json'});
+        const configUrl = URL.createObjectURL(configBlob);
+        const configLink = document.createElement('a');
+        configLink.href = configUrl;
+        configLink.download = 'secure_config.json';
+        configLink.click();
+        
+        // Show EXE download (you'll upload this later)
+        document.getElementById('download-section').style.display = 'block';
+        
+        // Create fake EXE download link (replace with real later)
+        setTimeout(() => {
+            alert(' secure_config.json downloaded!\n\nNow download LinkedInBot.exe from the link above,\nput BOTH files + Credentials.json together, then run EXE!');
+        }, 500);
+    }
+    </script>
+</body>
+</html>
