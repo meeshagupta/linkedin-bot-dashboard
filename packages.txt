@@ -1,4 +1,10 @@
 chromium
 chromium-driver
 xvfb
+libglib2.0-0
+libnss3
+libgconf-2-4
+libxss1
+libasound2
+
 
