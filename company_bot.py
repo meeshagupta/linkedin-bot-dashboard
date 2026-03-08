@@ -170,11 +170,13 @@ class LinkedInSeleniumClient:
         options.add_argument('--disable-dev-shm-usage') 
         options.add_argument('--disable-gpu')
 
-        # CLOUD DEVTOOLSPORT FIX (ADD THESE 4 LINES!)
+        # ✅ STREAMLIT CLOUD MANDATORY FLAGS
+        options.add_argument('--headless=new')
         options.add_argument('--no-sandbox')
         options.add_argument('--disable-dev-shm-usage')
-        options.add_argument('--remote-debugging-pipe')  #  KEY FIX!
         options.add_argument('--disable-gpu')
+        options.add_argument('--no-zygote')
+        options.add_argument('--single-process')
 
         # YOUR ELITE STEALTH (KEEP ALL - PERFECT!)
         options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logger"])
@@ -556,6 +558,7 @@ if __name__ == "__main__":
     finally:
         if bot.selenium:
             bot.selenium.close()
+
 
 
 
