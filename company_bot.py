@@ -136,10 +136,8 @@ class GoogleSheetHandler:
                 if "status" in header.lower().strip():
                     status_col = col_num
                     break
-        
             if not status_col:
                 return False
-        
             row_num = row_index + 2  # Skip header
             current_status = self.sheet.cell(row_num, status_col).value or ""
         
@@ -552,4 +550,5 @@ if __name__ == "__main__":
     finally:
         if bot.selenium:
             bot.selenium.close()
+
 
