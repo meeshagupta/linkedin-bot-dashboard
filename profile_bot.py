@@ -137,85 +137,87 @@ class LinkedInSeleniumClient:
         self.setup_driver()
 
     def setup_driver(self):
-        from selenium.webdriver.chrome.service import Service
-        from webdriver_manager.chrome import ChromeDriverManager
-    
-        options = Options()
-    
-        #  2026 ELITE STEALTH (BOTH PROBLEMS SOLVED)
-        options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logger"])
-        options.add_experimental_option('useAutomationExtension', False)
-    
-        #  BANNER KILLER (Chrome 120+)
-        options.add_argument("--disable-blink-features=AutomationControlled")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--disable-infobars")  # Legacy support
-    
-        #  NO "NEW DEVICE" EMAILS
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-web-security")
-        options.add_argument("--disable-features=VizDisplayCompositor")
-        options.add_argument("--disable-background-timer-throttling")
-        options.add_argument("--disable-backgrounding-occluded-windows")
-        options.add_argument("--disable-renderer-backgrounding")
-    
-        #  HUMAN CHROME PROFILE
-        options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-        options.add_argument("--window-size=1920,1080")
-        options.add_argument("--start-maximized")
-        options.add_argument("--disable-notifications")
-    
-        if self.headless:
-            options.add_argument("--headless=new")  # Modern headless
-    
-        # Create driver
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=options)
-    
-        #  ULTRA STEALTH SCRIPTS (Execute BEFORE any page loads)
-        self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
-            'source': '''
-                // Block ALL webdriver detection
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined,
-                });
-            
-                // Fake Chrome object
-                window.chrome = {
-                    runtime: {
-                        PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros' },
-                        PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
-                    },
-                };
-            
-                // Fake plugins
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5],
-                });
-            
-                // Block automation flags
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en'],
-                });
-            
-                // Permissions API spoofing
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({ state: Notification.permission }) :
-                        originalQuery(parameters)
-                );
-            '''
-        })
-    
-        # Extra stealth after driver creation
-        self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined,});")
-    
-        self.driver.implicitly_wait(15)
-        logger.info(" ELITE STEALTH Chrome ready - NO BANNER + NO EMAILS ")
+    from selenium.webdriver.chrome.service import Service
+    from webdriver_manager.chrome import ChromeDriverManager
 
+    options = Options()
 
+    # CLOUD DEVTOOLSPORT FIX (ADD THESE 4 LINES!)
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('--remote-debugging-pipe')  #  KEY FIX!
+    options.add_argument('--disable-gpu')
+
+    # YOUR 2026 ELITE STEALTH (KEEP ALL!)
+    options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logger"])
+    options.add_experimental_option('useAutomationExtension', False)
+
+    # BANNER KILLER (Chrome 120+)
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-infobars")  # Legacy support
+
+    # NO "NEW DEVICE" EMAILS
+    options.add_argument("--disable-web-security")
+    options.add_argument("--disable-features=VizDisplayCompositor")
+    options.add_argument("--disable-background-timer-throttling")
+    options.add_argument("--disable-backgrounding-occluded-windows")
+    options.add_argument("--disable-renderer-backgrounding")
+
+    # HUMAN CHROME PROFILE
+    options.add_argument("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")  # Linux UA!
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--start-maximized")
+    options.add_argument("--disable-notifications")
+
+    if self.headless:
+        options.add_argument("--headless=new")  # Modern headless
+
+    # Create driver
+    service = Service(ChromeDriverManager().install())
+    self.driver = webdriver.Chrome(service=service, options=options)
+
+    # YOUR ULTRA STEALTH SCRIPTS (KEEP!)
+    self.driver.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+        'source': '''
+            // Block ALL webdriver detection
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
+        
+            // Fake Chrome object
+            window.chrome = {
+                runtime: {
+                    PlatformOs: { MAC: 'mac', WIN: 'win', ANDROID: 'android', CROS: 'cros' },
+                    PlatformArch: { ARM: 'arm', X86_32: 'x86-32', X86_64: 'x86-64' },
+                },
+            };
+        
+            // Fake plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+        
+            // Block automation flags
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['en-US', 'en'],
+            });
+        
+            // Permissions API spoofing
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+        '''
+    })
+
+    # Extra stealth
+    self.driver.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined,});")
+
+    self.driver.implicitly_wait(15)
+    logger.info(" CLOUD DEVTOOLSPORT FIXED - ELITE STEALTH Chrome ready!")
 
     def login(self):
         try:
@@ -520,3 +522,4 @@ if __name__ == "__main__":
     finally:
         if bot.selenium:
             bot.selenium.close()
+
