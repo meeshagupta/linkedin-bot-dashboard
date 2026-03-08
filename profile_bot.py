@@ -139,8 +139,14 @@ class LinkedInSeleniumClient:
     def setup_driver(self):
         from selenium.webdriver.chrome.service import Service
         from webdriver_manager.chrome import ChromeDriverManager
-
+        from webdriver_manager.core.os_manager import ChromeType  # ADD THIS IMPORT
         options = Options()
+
+        # ✅ STREAMLIT CLOUD MANDATORY FLAGS (ADD THESE 4)
+        options.add_argument('--headless=new')  # ALWAYS headless on cloud
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage') 
+        options.add_argument('--disable-gpu')
 
         # CLOUD DEVTOOLSPORT FIX (ADD THESE 4 LINES!)
         options.add_argument('--no-sandbox')
@@ -148,9 +154,11 @@ class LinkedInSeleniumClient:
         options.add_argument('--remote-debugging-pipe')  #  KEY FIX!
         options.add_argument('--disable-gpu')
 
-        # YOUR 2026 ELITE STEALTH (KEEP ALL!)
+        # YOUR ELITE STEALTH (KEEP ALL - PERFECT!)
         options.add_experimental_option("excludeSwitches", ["enable-automation", "enable-logger"])
         options.add_experimental_option('useAutomationExtension', False)
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-extensions")
 
         # BANNER KILLER (Chrome 120+)
         options.add_argument("--disable-blink-features=AutomationControlled")
@@ -174,7 +182,8 @@ class LinkedInSeleniumClient:
             options.add_argument("--headless=new")  # Modern headless
 
         # Create driver
-        service = Service(ChromeDriverManager().install())
+        # ✅ STREAMLIT CHROMIUM FIX (REPLACE THIS LINE)
+        service = Service(ChromeDriverManager(chrome_type=ChromeType.CHROMIUM).install())
         self.driver = webdriver.Chrome(service=service, options=options)
 
         # YOUR ULTRA STEALTH SCRIPTS (KEEP!)
@@ -522,5 +531,6 @@ if __name__ == "__main__":
     finally:
         if bot.selenium:
             bot.selenium.close()
+
 
 
