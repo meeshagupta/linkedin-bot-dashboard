@@ -1,43 +1,37 @@
-"""
-app.py — Streamlit dashboard for LinkedIn Bot.
-Features: Start button, Stop button (thread-safe), live status display.
-"""
 import streamlit as st
 import threading
+import queue
 import os
 import sys
+import logging
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 st.set_page_config(page_title="LinkedIn Bot", page_icon="🤖", layout="wide")
-
 st.title("🤖 LinkedIn Comment Liker Bot - PRO")
 st.markdown("---")
 
-# ── Session state init ────────────────────────────────────────────────────────
-if "stop_event"   not in st.session_state:
-    st.session_state.stop_event   = threading.Event()
-if "bot_running"  not in st.session_state:
-    st.session_state.bot_running  = False
-if "bot_status"   not in st.session_state:
-    st.session_state.bot_status   = "idle"   # idle | running | stopped | done | error
-if "status_msg"   not in st.session_state:
-    st.session_state.status_msg   = ""
+# ── Session state ─────────────────────────────────────────────────────────────
+for k, v in {
+    "stop_event":  threading.Event(),
+    "bot_running": False,
+    "bot_status":  "idle",
+    "status_msg":  "",
+    "log_lines":   [],
+    "log_queue":   queue.Queue(),
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.header("🔧 Bot Configuration")
-bot_type = st.sidebar.selectbox(
-    "Choose Bot:", ["Profile (profile_bot.py)", "Company (company_bot.py)"]
-)
+bot_type = st.sidebar.selectbox("Choose Bot:", ["Profile (profile_bot.py)", "Company (company_bot.py)"])
 
 if "Company" in bot_type:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🏢 Company Page")
-    company_name = st.sidebar.text_input(
-        "Company Name",
-        placeholder="e.g. Microsoft, Google",
-        help="Exact company name as shown on LinkedIn",
-    )
+    company_name = st.sidebar.text_input("Company Name", placeholder="e.g. Microsoft, Google")
     if company_name:
         st.sidebar.info(f"🔍 Will switch to: '{company_name}'")
 else:
@@ -45,11 +39,7 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.subheader("📄 Upload Credentials")
-uploaded_file = st.sidebar.file_uploader(
-    "📄 Google Service Account JSON",
-    type="json",
-    help="Upload your credentials.json file",
-)
+uploaded_file = st.sidebar.file_uploader("📄 Google Service Account JSON", type="json")
 if uploaded_file:
     st.sidebar.success(f"✅ {uploaded_file.name} loaded!")
 else:
@@ -57,152 +47,138 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.info("🖥️ Browser runs headless (invisible) on Streamlit Cloud automatically.")
-
 email     = st.sidebar.text_input("🔐 LinkedIn Email")
 password  = st.sidebar.text_input("🔑 LinkedIn Password", type="password")
 sheet_url = st.sidebar.text_input("📊 Google Sheet URL")
 
-# ── Status banner ─────────────────────────────────────────────────────────────
-status_colors = {
-    "idle":    ("⚪", "secondary"),
-    "running": ("🟢", "success"),
-    "stopped": ("🔴", "error"),
-    "done":    ("✅", "success"),
-    "error":   ("❌", "error"),
-}
-icon, _ = status_colors.get(st.session_state.bot_status, ("⚪", "secondary"))
+# ── Status ────────────────────────────────────────────────────────────────────
+icons = {"idle":"⚪","running":"🟢","stopped":"🔴","done":"✅","error":"❌"}
+icon  = icons.get(st.session_state.bot_status, "⚪")
 st.markdown(f"**Status:** {icon} `{st.session_state.bot_status.upper()}`"
             + (f" — {st.session_state.status_msg}" if st.session_state.status_msg else ""))
 
-# ── Control buttons ───────────────────────────────────────────────────────────
-col_start, col_stop, col_spacer = st.columns([1, 1, 4])
+# ── Buttons ───────────────────────────────────────────────────────────────────
+c1, c2, _ = st.columns([1, 1, 4])
+with c1:
+    start_clicked = st.button("🚀 START BOT", type="primary",
+                               use_container_width=True,
+                               disabled=st.session_state.bot_running)
+with c2:
+    stop_clicked = st.button("⏹ STOP BOT", type="secondary",
+                              use_container_width=True,
+                              disabled=not st.session_state.bot_running)
 
-with col_start:
-    start_clicked = st.button(
-        "🚀 START BOT",
-        type="primary",
-        use_container_width=True,
-        disabled=st.session_state.bot_running,
-    )
+# ── Live log ──────────────────────────────────────────────────────────────────
+st.markdown("#### 📋 Live Log")
 
-with col_stop:
-    stop_clicked = st.button(
-        "⏹ STOP BOT",
-        type="secondary",
-        use_container_width=True,
-        disabled=not st.session_state.bot_running,
-    )
+# Drain queue into log_lines
+while not st.session_state.log_queue.empty():
+    try:
+        st.session_state.log_lines.append(st.session_state.log_queue.get_nowait())
+    except queue.Empty:
+        break
 
-# ── Stop handler (immediate) ──────────────────────────────────────────────────
+log_text = "\n".join(st.session_state.log_lines[-40:]) or "Waiting for bot to start…"
+st.code(log_text, language=None)
+
+if st.button("🗑 Clear log"):
+    st.session_state.log_lines = []
+    st.rerun()
+
+# ── Stop ──────────────────────────────────────────────────────────────────────
 if stop_clicked:
     st.session_state.stop_event.set()
     st.session_state.bot_running = False
     st.session_state.bot_status  = "stopped"
-    st.session_state.status_msg  = "Stop signal sent — bot will finish current action then halt"
-    st.warning("⏹ Stop signal sent. Bot will stop after current row completes.")
+    st.session_state.status_msg  = "Stop signal sent"
+    st.warning("⏹ Bot will stop after completing current action.")
     st.rerun()
 
-# ── Output area ───────────────────────────────────────────────────────────────
-output_area = st.empty()
+# ── Thread helpers ────────────────────────────────────────────────────────────
+def attach_queue_handler(log_queue, logger_name):
+    class QH(logging.Handler):
+        def emit(self, r):
+            log_queue.put(self.format(r))
+    h = QH()
+    h.setFormatter(logging.Formatter("%(asctime)s  %(message)s", datefmt="%H:%M:%S"))
+    lg = logging.getLogger(logger_name)
+    lg.handlers = [x for x in lg.handlers if not isinstance(x, QH)]
+    lg.addHandler(h)
+    lg.setLevel(logging.INFO)
 
-# ── Bot thread function ───────────────────────────────────────────────────────
 def run_bot(bot_type, email, password, sheet_url, company_name,
-            creds_path, stop_event):
+            creds_path, stop_event, log_queue):
     try:
         if "Profile" in bot_type:
-            from profile_bot import Config as BotConfig, LinkedInCommentLiker
+            import profile_bot as mod
+            attach_queue_handler(log_queue, "ProfileBot")
         else:
-            from company_bot import Config as BotConfig, LinkedInCommentLiker
-            BotConfig.COMPANY_NAME = company_name.strip()
+            import company_bot as mod
+            attach_queue_handler(log_queue, "CompanyBot")
+            mod.Config.COMPANY_NAME = company_name.strip()
 
-        BotConfig.GOOGLE_CREDENTIALS_FILE = creds_path
-        BotConfig.GOOGLE_SHEET_URL        = sheet_url
-        BotConfig.LINKEDIN_EMAIL          = email
-        BotConfig.LINKEDIN_PASSWORD       = password
-        BotConfig.HEADLESS_MODE           = True
+        mod.Config.GOOGLE_CREDENTIALS_FILE = creds_path
+        mod.Config.GOOGLE_SHEET_URL        = sheet_url
+        mod.Config.LINKEDIN_EMAIL          = email
+        mod.Config.LINKEDIN_PASSWORD       = password
+        mod.Config.HEADLESS_MODE           = True
 
-        bot = LinkedInCommentLiker(BotConfig, stop_event=stop_event)
+        log_queue.put("⏳ Starting Chrome and logging in…")
+        bot = mod.LinkedInCommentLiker(mod.Config, stop_event=stop_event)
         bot.initialize()
+        log_queue.put("✅ Logged in! Processing posts now…")
         bot.run()
 
-        if stop_event.is_set():
-            st.session_state.bot_status  = "stopped"
-            st.session_state.status_msg  = "Bot stopped by user"
-        else:
-            st.session_state.bot_status  = "done"
-            st.session_state.status_msg  = "All rows processed!"
+        st.session_state.bot_status = "stopped" if stop_event.is_set() else "done"
+        st.session_state.status_msg = "Stopped by user" if stop_event.is_set() else "All rows done!"
 
     except Exception as e:
-        st.session_state.bot_status  = "error"
-        st.session_state.status_msg  = str(e)
-
+        st.session_state.bot_status = "error"
+        st.session_state.status_msg = str(e)
+        log_queue.put(f"❌ ERROR: {e}")
     finally:
         st.session_state.bot_running = False
         if os.path.exists(creds_path):
             os.remove(creds_path)
 
-# ── Start handler ─────────────────────────────────────────────────────────────
+# ── Start ─────────────────────────────────────────────────────────────────────
 if start_clicked:
-    # Validate inputs
     if not uploaded_file:
-        st.error("❌ Upload Google Service Account JSON first!")
-        st.stop()
+        st.error("❌ Upload Google Service Account JSON first!"); st.stop()
     if not all([email, password, sheet_url]):
-        st.error("❌ Fill in Email, Password and Sheet URL!")
-        st.stop()
+        st.error("❌ Fill in Email, Password and Sheet URL!"); st.stop()
     if "Company" in bot_type and not company_name.strip():
-        st.error("❌ Company name is required for Company Bot!")
-        st.stop()
+        st.error("❌ Company name required for Company Bot!"); st.stop()
 
-    # Save credentials temporarily
     creds_path = "temp_creds.json"
     with open(creds_path, "wb") as f:
         f.write(uploaded_file.getvalue())
 
-    # Reset stop event for fresh run
     st.session_state.stop_event  = threading.Event()
+    st.session_state.log_queue   = queue.Queue()
+    st.session_state.log_lines   = []
     st.session_state.bot_running = True
     st.session_state.bot_status  = "running"
     st.session_state.status_msg  = "Bot is running…"
 
-    thread = threading.Thread(
+    threading.Thread(
         target=run_bot,
         args=(bot_type, email, password, sheet_url, company_name,
-              creds_path, st.session_state.stop_event),
+              creds_path, st.session_state.stop_event, st.session_state.log_queue),
         daemon=True,
-    )
-    thread.start()
+    ).start()
     st.rerun()
 
-# ── Running indicator ─────────────────────────────────────────────────────────
+# ── Auto-refresh while running ────────────────────────────────────────────────
 if st.session_state.bot_running:
-    output_area.info(
-        "🤖 Bot is running in the background.\n\n"
-        "• It will like the post and up to 3 comments for each URL in your sheet.\n"
-        "• Status updates appear in your Google Sheet in real time.\n"
-        "• Press **⏹ STOP BOT** at any time to halt after the current row."
-    )
+    time.sleep(2)
+    st.rerun()
 
-# ── Help panel ────────────────────────────────────────────────────────────────
+# ── Help ──────────────────────────────────────────────────────────────────────
 st.markdown("---")
-col_a, col_b = st.columns(2)
-
-with col_a:
-    st.markdown("""
-    **📋 Google Sheet format:**
-    | Post Url | Name | Status |
-    |----------|------|--------|
-    | https://lnkd.in/xyz | John Doe | |
-    | https://lnkd.in/abc | Jane Doe | |
-    """)
-
-with col_b:
-    st.markdown("""
-    **🔧 Common fixes if bot shows FAILED:**
-    1. Make sure the post URL is a **direct post link** (not a feed URL)
-    2. Share the Google Sheet with the `client_email` from your JSON
-    3. Sheet columns must be: **Post Url** | **Name** | **Status**
-    4. Check LinkedIn credentials are correct
-    """)
-
+ca, cb = st.columns(2)
+with ca:
+    st.markdown("**📋 Sheet format:** `Post Url | Name | Status`")
+with cb:
+    st.markdown("**🔧 If FAILED:** Use direct post URLs, not feed URLs")
 st.caption("🤖 PRO Edition · Streamlit Cloud Ready · Stop Anytime")
