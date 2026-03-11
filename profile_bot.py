@@ -248,14 +248,14 @@ class LinkedInClient:
         logger.info(f"📝 Found {len(all_btns)} comment like button(s)")
 
         liked = 0
-        for btn in all_btns[:3]:
+        for btn in all_btns:          # ← no limit, like ALL comments
             if self.stopped():
                 break
             try:
                 safe_click(self.driver, btn)
                 human_sleep(Config.COMMENT_MIN_WAIT, Config.COMMENT_MAX_WAIT)
                 liked += 1
-                logger.info(f"✅ Comment {liked} liked")
+                logger.info(f"✅ Comment {liked}/{len(all_btns)} liked")
             except StaleElementReferenceException:
                 continue
             except Exception as e:
