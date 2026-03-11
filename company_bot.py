@@ -27,10 +27,10 @@ class Config:
     LINKEDIN_EMAIL          = ""
     LINKEDIN_PASSWORD       = ""
     COMPANY_NAME            = ""
-    MIN_DELAY               = 20
-    MAX_DELAY               = 35
-    COMMENT_MIN_WAIT        = 8
-    COMMENT_MAX_WAIT        = 15
+    MIN_DELAY               = 5     # seconds between posts
+    MAX_DELAY               = 8
+    COMMENT_MIN_WAIT        = 1     # seconds between comment likes
+    COMMENT_MAX_WAIT        = 2
     HEADLESS_MODE           = True
     LOG_FILE                = "bot_logs.txt"
 
@@ -43,24 +43,24 @@ logging.basicConfig(
 logger = logging.getLogger("CompanyBot")
 
 # ==================== STEALTH HELPERS ====================
-def human_sleep(a=1, b=3):
+def human_sleep(a=0.3, b=0.8):
     time.sleep(random.uniform(a, b))
 
 def human_pause():
-    t = random.uniform(3, 7)
+    t = random.uniform(1, 2)
     logger.info(f"⏳ Pause {t:.1f}s")
     time.sleep(t)
 
-def human_scroll(driver, times=3):
+def human_scroll(driver, times=2):
     for _ in range(times):
         driver.execute_script(f"window.scrollBy(0, {random.randint(200,500)});")
-        human_sleep(0.4, 1.0)
+        time.sleep(random.uniform(0.2, 0.5))
 
 def human_type(element, text):
     for ch in text:
         element.send_keys(ch)
-        time.sleep(random.uniform(0.04, 0.13))
-    human_sleep(0.5, 1.2)
+        time.sleep(random.uniform(0.03, 0.08))
+    time.sleep(0.3)
 
 def safe_click(driver, element):
     """Scroll into view then JS-click (avoids intercept errors)."""
@@ -134,7 +134,7 @@ class LinkedInClient:
     def login(self):
         logger.info("🔐 Logging in…")
         self.driver.get("https://www.linkedin.com/login")
-        human_sleep(3, 5)
+        human_sleep(1, 2)
 
         email_f = WebDriverWait(self.driver, 20).until(
             EC.presence_of_element_located((By.ID, "username"))
@@ -152,7 +152,7 @@ class LinkedInClient:
         if "checkpoint" in self.driver.current_url:
             raise RuntimeError("LinkedIn is asking for verification — please verify manually first.")
         logger.info("✅ Logged in!")
-        human_sleep(4, 6)
+        human_sleep(2, 3)
 
     # ── Company page switch ──────────────────────────────────────────────────
     def switch_to_company(self, company_name: str) -> bool:
@@ -499,11 +499,12 @@ class LinkedInCommentLiker:
             logger.info(f"\n{'='*55}\n[{i+1}/{len(rows)}] {post_url[:55]}…\n{'='*55}")
 
             try:
+                logger.info(f"🌐 Opening post URL…")
                 self.client.driver.get(post_url)
-                human_sleep(8, 12)
+                human_sleep(3, 5)           # was 8-12s
 
                 post_liked     = self.client.like_post()
-                human_pause()
+                human_pause()               # now 1-2s, was 3-7s
                 comments_liked = self.client.like_comments()
 
                 status = (
@@ -521,7 +522,6 @@ class LinkedInCommentLiker:
             if not self.stop_event.is_set() and i < len(rows) - 1:
                 delay = random.uniform(self.config.MIN_DELAY, self.config.MAX_DELAY)
                 logger.info(f"😴 Waiting {delay:.0f}s before next row…")
-                # Sleep in 1s chunks so stop_event is checked frequently
                 for _ in range(int(delay)):
                     if self.stop_event.is_set():
                         break
