@@ -174,15 +174,29 @@ class LinkedInClient:
 
     def like_post(self) -> bool:
         logger.info("❤️ Attempting to like post…")
-        human_scroll(self.driver, 2)
-        human_sleep(1, 2)
 
+        # Wait for page to fully load before scrolling
+        human_sleep(3, 5)
+        human_scroll(self.driver, 2)
+        human_sleep(2, 3)
+
+        # LinkedIn 2025/2026 selectors — ordered from most to least specific
         selectors = [
+            # New 2025 reaction button (most common)
+            "//button[contains(@class,'reactions-react-button')]",
+            # aria-label containing 'React' for the post (not comments)
+            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'React')]",
+            # Like specifically
+            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'Like')]",
+            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'Like')]",
+            # Fallback: any react/like button not inside a comment
+            "//div[not(contains(@class,'comment'))]//button[contains(@aria-label,'React to')]",
+            "//button[contains(@aria-label,'React to this post')]",
+            "//button[contains(@aria-label,'Like this post')]",
+            # Old class-based selectors as last resort
             "//button[contains(@class,'react-button__trigger')]",
-            "//button[contains(@aria-label,'React to') and contains(@aria-label,'post')]",
-            "//button[contains(@aria-label,'Like') and not(contains(@aria-label,'comment'))]",
-            "//button[@data-control-name='react_to_post']",
-            "//button[.//span[text()='Like']]",
+            "//button[.//span[normalize-space(text())='Like']]",
         ]
 
         like_btn = None
@@ -190,28 +204,53 @@ class LinkedInClient:
             try:
                 candidates = self.driver.find_elements(By.XPATH, sel)
                 for btn in candidates:
-                    if btn.get_attribute("aria-pressed") == "true":
+                    # Skip hidden or zero-size buttons
+                    if not btn.is_displayed():
+                        continue
+                    # Already liked — nothing to do
+                    pressed = btn.get_attribute("aria-pressed") or ""
+                    label   = (btn.get_attribute("aria-label") or "").lower()
+                    if pressed == "true" or "unlike" in label:
                         logger.info("ℹ️ Post already liked")
                         return True
                     like_btn = btn
                     break
                 if like_btn:
+                    logger.info(f"✅ Like button found via: {sel}")
                     break
             except StaleElementReferenceException:
                 continue
             except Exception:
                 continue
 
+        # Last-resort: first visible button in the social action bar
         if not like_btn:
             try:
-                like_btn = self.driver.find_element(
-                    By.XPATH, "//div[contains(@class,'social-actions')]//button[1]"
+                bars = self.driver.find_elements(
+                    By.XPATH,
+                    "//div[contains(@class,'social-action') or contains(@class,'feed-shared-social')]"
                 )
+                for bar in bars:
+                    btns = bar.find_elements(By.TAG_NAME, "button")
+                    for b in btns:
+                        if b.is_displayed():
+                            like_btn = b
+                            logger.info("⚠️ Using fallback: first button in social bar")
+                            break
+                    if like_btn:
+                        break
             except Exception:
                 pass
 
         if not like_btn:
-            logger.warning("❌ No like button found on this page")
+            # Log page source snippet to help diagnose future selector changes
+            try:
+                snippet = self.driver.find_element(
+                    By.XPATH, "//div[contains(@class,'social-action') or contains(@class,'feed-shared')]"
+                ).get_attribute("outerHTML")[:500]
+                logger.warning(f"❌ No like button found. Social bar HTML: {snippet}")
+            except Exception:
+                logger.warning("❌ No like button found on this page")
             return False
 
         try:
@@ -228,10 +267,14 @@ class LinkedInClient:
         human_scroll(self.driver, 3)
         human_sleep(3, 5)
 
-        for sel in [
+        # Expand comments if collapsed
+        expand_selectors = [
             "//button[contains(@aria-label,'Load previous comments')]",
             "//button[contains(@aria-label,'See more comments')]",
-        ]:
+            "//button[contains(@aria-label,'View more comments')]",
+            "//button[contains(text(),'comments')]",
+        ]
+        for sel in expand_selectors:
             try:
                 btn = self.driver.find_element(By.XPATH, sel)
                 safe_click(self.driver, btn)
@@ -240,15 +283,23 @@ class LinkedInClient:
             except Exception:
                 pass
 
-        human_scroll(self.driver, 2)
+        human_scroll(self.driver, 3)
         human_sleep(2, 3)
 
+        # LinkedIn 2025/2026 comment like button selectors
         comment_selectors = [
-            "//div[contains(@class,'comment') or contains(@class,'Comment')]"
-            "//button[contains(@class,'react-button__trigger')]",
+            # Most specific — reaction button inside a comment block
+            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'Like')]",
+            "//article[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
+            # Slightly broader
+            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'Like')]",
+            # New 2025 reaction class inside comments
+            "//div[contains(@class,'comments-comment')]//button[contains(@class,'reactions-react-button')]",
+            # Fallback: any React button that mentions 'comment' in aria-label
             "//button[contains(@aria-label,'React to') and contains(@aria-label,'comment')]",
             "//button[contains(@aria-label,'Like') and contains(@aria-label,'comment')]",
-            "//button[contains(@class,'react-button__trigger')]",
         ]
 
         all_btns = []
@@ -256,22 +307,24 @@ class LinkedInClient:
             try:
                 found = self.driver.find_elements(By.XPATH, sel)
                 for b in found:
-                    if b.get_attribute("aria-pressed") != "true" and b not in all_btns:
+                    if not b.is_displayed():
+                        continue
+                    pressed = b.get_attribute("aria-pressed") or ""
+                    label   = (b.get_attribute("aria-label") or "").lower()
+                    if pressed == "true" or "unlike" in label:
+                        continue   # already liked
+                    if b not in all_btns:
                         all_btns.append(b)
                 if all_btns:
+                    logger.info(f"✅ Found buttons via: {sel}")
                     break
             except Exception:
                 continue
 
-        if all_btns and len(all_btns) > 1:
-            label = all_btns[0].get_attribute("aria-label") or ""
-            if "post" in label.lower() or "React to" in label:
-                all_btns = all_btns[1:]
-
         logger.info(f"📝 Found {len(all_btns)} comment like button(s)")
 
         liked = 0
-        for btn in all_btns:          # ← no limit, like ALL comments
+        for btn in all_btns:
             if self.stopped():
                 break
             try:
