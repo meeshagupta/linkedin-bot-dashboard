@@ -1,12 +1,14 @@
 """
 chrome_utils.py — Works on LOCAL (Mac/Win) and STREAMLIT CLOUD (Linux/headless).
-Uses undetected-chromedriver to bypass LinkedIn bot detection.
+Uses undetected-chromedriver with temp-dir patch to avoid /usr/bin permission errors.
 """
 import os
+import shutil
 import platform
 import subprocess
 import logging
 import tempfile
+import stat
 
 logger = logging.getLogger("ChromeUtils")
 
@@ -33,11 +35,32 @@ def _find_binary(names: list) -> str | None:
     return None
 
 
+def _get_writable_chromedriver() -> str | None:
+    """
+    Copy chromedriver to /tmp where Streamlit Cloud allows execution.
+    undetected_chromedriver needs to patch the binary — it can't do that
+    in /usr/bin (permission denied), but /tmp is always writable.
+    """
+    original = _find_binary(["chromedriver"])
+    if not original:
+        logger.warning("chromedriver not found on system!")
+        return None
+
+    tmp_driver = os.path.join(tempfile.gettempdir(), "chromedriver_uc")
+
+    if not os.path.exists(tmp_driver):
+        shutil.copy2(original, tmp_driver)
+        st = os.stat(tmp_driver)
+        os.chmod(tmp_driver, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        logger.info(f"✅ Copied chromedriver to {tmp_driver}")
+
+    return tmp_driver
+
+
 def get_chrome_driver(headless: bool = False):
     """
     Return a configured undetected Chrome WebDriver.
-    undetected_chromedriver patches the binary to remove bot fingerprints
-    that regular selenium exposes even with manual spoofing.
+    Copies chromedriver to /tmp first to avoid permission errors on Streamlit Cloud.
     """
     import undetected_chromedriver as uc
 
@@ -46,7 +69,6 @@ def get_chrome_driver(headless: bool = False):
 
     options = uc.ChromeOptions()
 
-    # Core stability flags (required for containers)
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
@@ -57,12 +79,7 @@ def get_chrome_driver(headless: bool = False):
     options.add_argument("--disable-popup-blocking")
     options.add_argument("--ignore-certificate-errors")
     options.add_argument("--window-size=1920,1080")
-
-    # Mimic a real desktop browser profile
     options.add_argument("--lang=en-US,en;q=0.9")
-    options.add_argument("--start-maximized")
-
-    # A realistic, recent user-agent
     options.add_argument(
         "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -72,28 +89,27 @@ def get_chrome_driver(headless: bool = False):
     system = platform.system()
 
     if system == "Linux":
-        chromium_bin    = _find_binary(["chromium", "chromium-browser", "google-chrome"])
-        chromedriver_bin = _find_binary(["chromedriver"])
-
+        chromium_bin = _find_binary(["chromium", "chromium-browser", "google-chrome"])
         if chromium_bin:
             options.binary_location = chromium_bin
             logger.info(f"Using binary: {chromium_bin}")
         else:
             logger.warning("No Chromium/Chrome binary found!")
 
-        driver_exec = chromedriver_bin  # may be None; uc handles None gracefully
+        driver_path = _get_writable_chromedriver()
 
         driver = uc.Chrome(
-            options        = options,
-            driver_executable_path = driver_exec,
-            headless       = use_headless,
-            use_subprocess = True,
+            options                = options,
+            driver_executable_path = driver_path,
+            headless               = use_headless,
+            use_subprocess         = True,
         )
+
     else:
-        # Mac / Windows local dev
         driver = uc.Chrome(
-            options  = options,
-            headless = use_headless,
+            options      = options,
+            headless     = use_headless,
+            version_main = 146,
         )
 
     driver.implicitly_wait(15)
