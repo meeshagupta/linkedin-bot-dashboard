@@ -1,6 +1,5 @@
 """
 chrome_utils.py — Works on LOCAL (Mac/Win) and STREAMLIT CLOUD (Linux/headless).
-Uses undetected-chromedriver with temp-dir patch to avoid /usr/bin permission errors.
 """
 import os
 import shutil
@@ -35,12 +34,23 @@ def _find_binary(names: list) -> str | None:
     return None
 
 
+def _get_chromium_version(binary: str) -> int | None:
+    """Detect the actual Chromium version so uc uses the right ChromeDriver."""
+    try:
+        result = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True, timeout=10
+        )
+        version_str = result.stdout.strip()  # e.g. "Chromium 114.0.5735.90"
+        major = int(version_str.split()[1].split(".")[0])
+        logger.info(f"Detected Chromium version: {major}")
+        return major
+    except Exception as e:
+        logger.warning(f"Could not detect Chromium version: {e}")
+        return None
+
+
 def _get_writable_chromedriver() -> str | None:
-    """
-    Copy chromedriver to /tmp where Streamlit Cloud allows execution.
-    undetected_chromedriver needs to patch the binary — it can't do that
-    in /usr/bin (permission denied), but /tmp is always writable.
-    """
+    """Copy chromedriver to /tmp — Streamlit Cloud blocks writes to /usr/bin."""
     original = _find_binary(["chromedriver"])
     if not original:
         logger.warning("chromedriver not found on system!")
@@ -52,16 +62,12 @@ def _get_writable_chromedriver() -> str | None:
         shutil.copy2(original, tmp_driver)
         st = os.stat(tmp_driver)
         os.chmod(tmp_driver, st.st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
-        logger.info(f"✅ Copied chromedriver to {tmp_driver}")
+        logger.info(f"✅ Copied chromedriver → {tmp_driver}")
 
     return tmp_driver
 
 
 def get_chrome_driver(headless: bool = False):
-    """
-    Return a configured undetected Chrome WebDriver.
-    Copies chromedriver to /tmp first to avoid permission errors on Streamlit Cloud.
-    """
     import undetected_chromedriver as uc
 
     force_headless = is_streamlit_cloud()
@@ -69,10 +75,12 @@ def get_chrome_driver(headless: bool = False):
 
     options = uc.ChromeOptions()
 
+    # ── Stability flags (critical for containers) ────────────────────────────
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
+    options.add_argument("--single-process")          # ← KEY fix for container crash
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-notifications")
@@ -94,15 +102,17 @@ def get_chrome_driver(headless: bool = False):
             options.binary_location = chromium_bin
             logger.info(f"Using binary: {chromium_bin}")
         else:
-            logger.warning("No Chromium/Chrome binary found!")
+            logger.warning("No Chromium binary found!")
 
-        driver_path = _get_writable_chromedriver()
+        driver_path  = _get_writable_chromedriver()
+        version_main = _get_chromium_version(chromium_bin) if chromium_bin else None
 
         driver = uc.Chrome(
             options                = options,
             driver_executable_path = driver_path,
             headless               = use_headless,
             use_subprocess         = True,
+            version_main           = version_main,   # ← pass detected version
         )
 
     else:
