@@ -14,12 +14,13 @@ st.markdown("---")
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for k, v in {
-    "stop_event":  threading.Event(),
-    "bot_running": False,
-    "bot_status":  "idle",
-    "status_msg":  "",
-    "log_lines":   [],
-    "log_queue":   queue.Queue(),
+    "stop_event":          threading.Event(),
+    "bot_running":         False,
+    "bot_status":          "idle",
+    "status_msg":          "",
+    "log_lines":           [],
+    "log_queue":           queue.Queue(),
+    "saved_cookie_bytes":  None,
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -44,6 +45,22 @@ if uploaded_file:
     st.sidebar.success(f"✅ {uploaded_file.name} loaded!")
 else:
     st.sidebar.warning("❌ Upload JSON file first!")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🍪 Session Cookie (Recommended)")
+cookie_file_upload = st.sidebar.file_uploader(
+    "Upload linkedin_session.pkl",
+    type=["pkl"],
+    help="Upload a saved session file to skip login and avoid verification challenges. "
+         "Generate this once by running locally — see instructions below."
+)
+if cookie_file_upload:
+    st.sidebar.success("✅ Session cookie loaded — will skip login page!")
+else:
+    st.sidebar.info(
+        "ℹ️ No session file — bot will log in fresh. "
+        "If you get a verification error, follow the local-run instructions below."
+    )
 
 st.sidebar.markdown("---")
 st.sidebar.info("🖥️ Browser runs headless (invisible) on Streamlit Cloud automatically.")
@@ -107,7 +124,7 @@ def attach_queue_handler(log_queue, logger_name):
     lg.setLevel(logging.INFO)
 
 def run_bot(bot_type, email, password, sheet_url, company_name,
-            creds_path, stop_event, log_queue):
+            creds_path, cookie_path, stop_event, log_queue):
     try:
         if "Profile" in bot_type:
             import profile_bot as mod
@@ -122,12 +139,18 @@ def run_bot(bot_type, email, password, sheet_url, company_name,
         mod.Config.LINKEDIN_EMAIL          = email
         mod.Config.LINKEDIN_PASSWORD       = password
         mod.Config.HEADLESS_MODE           = True
+        mod.Config.COOKIE_FILE             = cookie_path   # ← NEW
 
         log_queue.put("⏳ Starting Chrome and logging in…")
         bot = mod.LinkedInCommentLiker(mod.Config, stop_event=stop_event)
         bot.initialize()
         log_queue.put("✅ Logged in! Processing posts now…")
         bot.run()
+
+        # If a new session was saved (fresh login), make it downloadable
+        if os.path.exists(cookie_path):
+            with open(cookie_path, "rb") as f:
+                st.session_state["saved_cookie_bytes"] = f.read()
 
         st.session_state.bot_status = "stopped" if stop_event.is_set() else "done"
         st.session_state.status_msg = "Stopped by user" if stop_event.is_set() else "All rows done!"
@@ -150,24 +173,43 @@ if start_clicked:
     if "Company" in bot_type and not company_name.strip():
         st.error("❌ Company name required for Company Bot!"); st.stop()
 
-    creds_path = "temp_creds.json"
+    creds_path  = "temp_creds.json"
+    cookie_path = "linkedin_session.pkl"
+
     with open(creds_path, "wb") as f:
         f.write(uploaded_file.getvalue())
 
-    st.session_state.stop_event  = threading.Event()
-    st.session_state.log_queue   = queue.Queue()
-    st.session_state.log_lines   = []
-    st.session_state.bot_running = True
-    st.session_state.bot_status  = "running"
-    st.session_state.status_msg  = "Bot is running…"
+    # Write uploaded session cookie file if provided
+    if cookie_file_upload:
+        with open(cookie_path, "wb") as f:
+            f.write(cookie_file_upload.getvalue())
+
+    st.session_state.stop_event         = threading.Event()
+    st.session_state.log_queue          = queue.Queue()
+    st.session_state.log_lines          = []
+    st.session_state.bot_running        = True
+    st.session_state.bot_status         = "running"
+    st.session_state.status_msg         = "Bot is running…"
+    st.session_state.saved_cookie_bytes = None
 
     threading.Thread(
         target=run_bot,
         args=(bot_type, email, password, sheet_url, company_name,
-              creds_path, st.session_state.stop_event, st.session_state.log_queue),
+              creds_path, cookie_path,
+              st.session_state.stop_event, st.session_state.log_queue),
         daemon=True,
     ).start()
     st.rerun()
+
+# ── Download saved session cookie after first login ───────────────────────────
+if st.session_state.saved_cookie_bytes:
+    st.success("🍪 New session saved! Download and re-upload next time to skip login:")
+    st.download_button(
+        "⬇️ Download linkedin_session.pkl",
+        data     = st.session_state.saved_cookie_bytes,
+        file_name= "linkedin_session.pkl",
+        mime     = "application/octet-stream",
+    )
 
 # ── Auto-refresh while running ────────────────────────────────────────────────
 if st.session_state.bot_running:
@@ -181,4 +223,33 @@ with ca:
     st.markdown("**📋 Sheet format:** `Post Url | Name | Status`")
 with cb:
     st.markdown("**🔧 If FAILED:** Use direct post URLs, not feed URLs")
+
+with st.expander("🔑 First-time setup: How to generate linkedin_session.pkl"):
+    st.markdown("""
+**You only need to do this once when running on Streamlit Cloud.**
+
+1. **On your own PC**, install the requirements:
+   ```
+   pip install selenium undetected-chromedriver
+   ```
+
+2. **Run this one-time script** (saves `linkedin_session.pkl` to your folder):
+   ```python
+   import time, pickle
+   import undetected_chromedriver as uc
+
+   driver = uc.Chrome(headless=False)          # visible window
+   driver.get("https://www.linkedin.com/login")
+   input("Log in manually in the browser, complete any verification, "
+         "then press ENTER here...")
+   pickle.dump(driver.get_cookies(), open("linkedin_session.pkl","wb"))
+   print("Saved! Upload this file to Streamlit.")
+   driver.quit()
+   ```
+
+3. **Upload `linkedin_session.pkl`** via the sidebar on Streamlit Cloud.
+
+4. The bot will now skip the login page entirely — no more verification challenges! ✅
+    """)
+
 st.caption("🤖 PRO Edition · Streamlit Cloud Ready · Stop Anytime")
