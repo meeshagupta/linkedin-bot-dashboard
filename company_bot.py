@@ -1,7 +1,6 @@
 """
 company_bot.py — LinkedIn automation for COMPANY page accounts.
-Fixes: updated 2025/2026 LinkedIn DOM selectors, working company switcher,
-       stop-flag support for the Streamlit stop button.
+Selectors, click logic and company switcher taken from proven working local scripts (13.py).
 """
 import time
 import random
@@ -14,9 +13,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.common.exceptions import (
-    TimeoutException, NoSuchElementException, StaleElementReferenceException
-)
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 
 from chrome_utils import get_chrome_driver
 from session_manager import SessionManager
@@ -28,9 +25,9 @@ class Config:
     LINKEDIN_EMAIL          = ""
     LINKEDIN_PASSWORD       = ""
     COMPANY_NAME            = ""
-    MIN_DELAY               = 5     # seconds between posts
+    MIN_DELAY               = 5
     MAX_DELAY               = 8
-    COMMENT_MIN_WAIT        = 1     # seconds between comment likes
+    COMMENT_MIN_WAIT        = 1
     COMMENT_MAX_WAIT        = 2
     HEADLESS_MODE           = True
     LOG_FILE                = "bot_logs.txt"
@@ -45,33 +42,29 @@ logging.basicConfig(
 logger = logging.getLogger("CompanyBot")
 
 # ==================== STEALTH HELPERS ====================
-def human_sleep(a=0.3, b=0.8):
+def human_sleep(a=0.5, b=1.5):
     time.sleep(random.uniform(a, b))
 
-def human_pause():
-    t = random.uniform(1, 2)
-    logger.info(f"⏳ Pause {t:.1f}s")
+def human_pause(a=2, b=5):
+    t = random.uniform(a, b)
+    logger.info(f"Pause {t:.1f}s")
     time.sleep(t)
 
-def human_scroll(driver, times=2):
+def human_scroll(driver, times=3):
     for _ in range(times):
-        driver.execute_script(f"window.scrollBy(0, {random.randint(200,500)});")
-        time.sleep(random.uniform(0.2, 0.5))
+        driver.execute_script(f"window.scrollBy(0, {random.randint(200, 600)});")
+        time.sleep(random.uniform(0.3, 0.8))
 
 def human_type(element, text):
     for ch in text:
         element.send_keys(ch)
-        time.sleep(random.uniform(0.03, 0.08))
-    time.sleep(0.3)
+        time.sleep(random.uniform(0.05, 0.15))
+    time.sleep(0.5)
 
-def safe_click(driver, element):
-    """Scroll into view then JS-click (avoids intercept errors)."""
-    driver.execute_script("arguments[0].scrollIntoView({block:'center',behavior:'smooth'});", element)
-    human_sleep(0.5, 1.0)
-    try:
-        ActionChains(driver).move_to_element(element).click().perform()
-    except Exception:
-        driver.execute_script("arguments[0].click();", element)
+def js_click(driver, element):
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+    time.sleep(random.uniform(0.3, 0.7))
+    driver.execute_script("arguments[0].click();", element)
 
 # ==================== GOOGLE SHEET ====================
 class GoogleSheetHandler:
@@ -83,7 +76,7 @@ class GoogleSheetHandler:
 
     def read_file(self):
         records = self.sheet.get_all_records()
-        logger.info(f"✅ Loaded {len(records)} rows")
+        logger.info(f"Loaded {len(records)} rows")
         return records
 
     def _status_col(self):
@@ -101,7 +94,7 @@ class GoogleSheetHandler:
                     row_index + 2, col,
                     f"{status} @ {datetime.now().strftime('%H:%M')}"
                 )
-                logger.info(f"📝 Row {row_index+2}: {status}")
+                logger.info(f"Row {row_index+2}: {status}")
         except Exception as e:
             logger.error(f"Sheet update error: {e}")
 
@@ -117,363 +110,291 @@ class GoogleSheetHandler:
 
 # ==================== LINKEDIN CLIENT ====================
 class LinkedInClient:
-    def __init__(self, email, password, headless=True, stop_event: threading.Event = None):
-        self.email       = email
-        self.password    = password
-        self.headless    = headless
-        self.stop_event  = stop_event or threading.Event()
-        self.driver      = None
+    def __init__(self, email, password, headless=True, stop_event=None):
+        self.email      = email
+        self.password   = password
+        self.headless   = headless
+        self.stop_event = stop_event or threading.Event()
+        self.driver     = None
 
-    # ── Setup ────────────────────────────────────────────────────────────────
     def setup_driver(self):
         self.driver = get_chrome_driver(headless=self.headless)
-        logger.info("🚀 Chrome ready!")
+        logger.info("Chrome ready!")
 
     def stopped(self):
         return self.stop_event.is_set()
 
-    # ── Login ────────────────────────────────────────────────────────────────
-    def login(self, cookie_file: str = "linkedin_session.pkl"):
-        logger.info("🍪 Checking for saved session…")
+    def login(self, cookie_file="linkedin_session.pkl"):
+        logger.info("Checking for saved session...")
         if SessionManager.load(self.driver, cookie_file):
-            logger.info("✅ Resumed from saved session — no login needed!")
-            return
+            self.driver.get("https://www.linkedin.com/feed/")
+            time.sleep(5)
+            url = self.driver.current_url
+            if "feed" in url or "mynetwork" in url:
+                logger.info("Resumed from saved session - no login needed!")
+                return
+            logger.warning("Session cookie expired - doing fresh login...")
 
-        logger.info("🔐 No saved session — logging in with credentials…")
+        logger.info("Logging in with credentials...")
         self.driver.get("https://www.linkedin.com/login")
-        human_sleep(2, 4)
+        time.sleep(random.uniform(3, 5))
 
-        email_f = WebDriverWait(self.driver, 20).until(
+        email_f = WebDriverWait(self.driver, 30).until(
             EC.presence_of_element_located((By.ID, "username"))
         )
         human_type(email_f, self.email)
-        human_sleep(0.5, 1.0)
+        time.sleep(random.uniform(1, 2))
 
         pw_f = self.driver.find_element(By.ID, "password")
         human_type(pw_f, self.password)
-        human_sleep(0.5, 1.2)
+        time.sleep(random.uniform(1, 2))
 
         self.driver.find_element(By.XPATH, "//button[@type='submit']").click()
 
-        WebDriverWait(self.driver, 40).until(
+        WebDriverWait(self.driver, 60).until(
             EC.any_of(EC.url_contains("feed"), EC.url_contains("checkpoint"))
         )
         if "checkpoint" in self.driver.current_url:
             raise RuntimeError(
-                "LinkedIn sent a verification challenge. Run bot once locally, "
-                "complete verification, then upload linkedin_session.pkl."
+                "LinkedIn verification required. "
+                "Run generate_session.py on your PC, complete verification, "
+                "then upload linkedin_session.pkl via the sidebar."
             )
-        logger.info("✅ Logged in!")
-        human_sleep(2, 3)
-        SessionManager.save(self.driver, cookie_file)
-        logger.info("💾 Session cookies saved for future runs")
 
-    # ── Company page switch ──────────────────────────────────────────────────
+        logger.info("Logged in!")
+        time.sleep(random.uniform(3, 5))
+        SessionManager.save(self.driver, cookie_file)
+        logger.info("Session saved for next run")
+
     def switch_to_company(self, company_name: str) -> bool:
         """
-        Switch LinkedIn 'posting identity' to a company page.
-        Works with LinkedIn's 2025 nav identity-switcher.
+        Switch LinkedIn posting identity to a company page.
+        Logic taken directly from proven working script (13.py).
         """
         if not company_name.strip():
             return False
 
-        logger.info(f"🏢 Switching to company page: {company_name}")
         try:
-            self.driver.get("https://www.linkedin.com/feed/")
-            human_sleep(3, 5)
+            logger.info(f"Opening company switcher for: '{company_name}'")
+            time.sleep(random.uniform(8, 12))
 
-            # ── Step 1: open the "Me" dropdown ───────────────────────────────
-            me_triggers = [
-                "//button[contains(@class,'global-nav__primary-link') and .//span[contains(@class,'nav-item__profile-member-photo')]]",
-                "//div[contains(@class,'global-nav__me')]//button",
-                "//span[text()='Me']/ancestor::button",
-                "//li[contains(@class,'global-nav__primary-item')]//button[@aria-label]",
+            # Open the identity switcher dropdown
+            circle_btn = WebDriverWait(self.driver, 15).until(
+                EC.element_to_be_clickable((By.XPATH,
+                    "//button[contains(@aria-label,'switching identity') or "
+                    "contains(@aria-label,'Open menu for switching')]"
+                ))
+            )
+            self.driver.execute_script("arguments[0].click();", circle_btn)
+            time.sleep(random.uniform(4, 6))
+
+            logger.info(f"Looking for exact match: '{company_name}'")
+
+            # Exact match selectors (from proven 13.py)
+            exact_selectors = [
+                f"//li[.//text()[normalize-space()='{company_name}']]",
+                f"//div[.//text()[normalize-space()='{company_name}']]",
+                f"//li[contains(@role,'option') or @role='menuitem'][normalize-space(.//text())='{company_name}']",
+                f"//div[contains(@role,'option') or @role='menuitem'][normalize-space(.//text())='{company_name}']",
+                f"//*[@aria-label='{company_name}' or @aria-labelledby='{company_name}']",
+                f"//*[normalize-space(text())='{company_name}' or normalize-space()='{company_name}']",
             ]
-            me_btn = None
-            for sel in me_triggers:
+
+            company_el = None
+            for i, selector in enumerate(exact_selectors, 1):
                 try:
-                    me_btn = WebDriverWait(self.driver, 6).until(
-                        EC.element_to_be_clickable((By.XPATH, sel))
+                    company_el = WebDriverWait(self.driver, 8).until(
+                        EC.element_to_be_clickable((By.XPATH, selector))
                     )
+                    logger.info(f"Exact match found (selector #{i}): '{company_el.text.strip()}'")
                     break
-                except TimeoutException:
+                except Exception:
                     continue
 
-            if not me_btn:
-                logger.warning("⚠️ Could not find Me button — trying alternate switch method")
-                return self._switch_via_post_box(company_name)
-
-            safe_click(self.driver, me_btn)
-            human_sleep(1, 2)
-
-            # ── Step 2: find company name in the dropdown ─────────────────────
-            company_selectors = [
-                f"//span[contains(translate(text(),'abcdefghijklmnopqrstuvwxyz','ABCDEFGHIJKLMNOPQRSTUVWXYZ'),'{company_name.upper()}')]",
-                f"//div[contains(@class,'artdeco-dropdown__content')]//span[contains(text(),'{company_name}')]",
-                f"//li[contains(@class,'artdeco-dropdown__item')]//span[contains(text(),'{company_name}')]",
-            ]
-            company_item = None
-            for sel in company_selectors:
+            if not company_el:
+                # Strict fallback: all words must appear
+                words = company_name.split()
+                conditions = [
+                    f'contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"), "{w.lower()}")'
+                    for w in words
+                ]
+                fuzzy_xpath = (
+                    f"//li[{' and '.join(conditions)}]"
+                    f"[string-length(normalize-space(.)) > {len(company_name) - 3}]"
+                )
                 try:
-                    company_item = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, sel))
-                    )
-                    break
-                except TimeoutException:
-                    continue
+                    company_el = self.driver.find_element(By.XPATH, fuzzy_xpath)
+                    logger.info(f"Fuzzy match: '{company_el.text.strip()[:50]}'")
+                except Exception:
+                    logger.warning(f"Company '{company_name}' not found in switcher")
+                    return False
 
-            if company_item:
-                safe_click(self.driver, company_item)
-                human_sleep(3, 5)
-                logger.info(f"✅ Switched to: {company_name}")
+            # Human click
+            logger.info(f"Clicking: '{company_el.text.strip()}'")
+            self.driver.execute_script("arguments[0].scrollIntoView({block:'center'});", company_el)
+            time.sleep(random.uniform(1, 2))
+            ActionChains(self.driver).move_to_element(company_el).click().perform()
+            time.sleep(random.uniform(3, 5))
+
+            # Click Save button
+            try:
+                save_btn = WebDriverWait(self.driver, 10).until(
+                    EC.element_to_be_clickable((By.XPATH,
+                        "//button[(contains(text(),'Save') or contains(@aria-label,'Save')) "
+                        "and not(contains(@disabled,'true'))]"
+                    ))
+                )
+                self.driver.execute_script("arguments[0].click();", save_btn)
+                logger.info("Saved! Company switch successful!")
+                time.sleep(random.uniform(3, 5))
                 return True
-            else:
-                logger.warning(f"⚠️ '{company_name}' not in Me dropdown — trying post-box method")
-                return self._switch_via_post_box(company_name)
+            except Exception:
+                logger.warning("No Save button found - may have auto-switched")
+                return True
 
         except Exception as e:
-            logger.warning(f"⚠️ Company switch error: {e}")
+            logger.error(f"Company switch failed: {str(e)[:100]}")
             return False
 
-    def _switch_via_post_box(self, company_name: str) -> bool:
-        """
-        Fallback: use the 'Posting as' selector inside the post creation box.
-        LinkedIn shows this when you have company admin access.
-        """
-        try:
-            self.driver.get("https://www.linkedin.com/feed/")
-            human_sleep(3, 5)
-
-            # Click "Start a post"
-            start_post_sel = [
-                "//span[contains(text(),'Start a post')]",
-                "//button[contains(@class,'share-box-feed-entry__trigger')]",
-            ]
-            for sel in start_post_sel:
-                try:
-                    btn = WebDriverWait(self.driver, 6).until(
-                        EC.element_to_be_clickable((By.XPATH, sel))
-                    )
-                    safe_click(self.driver, btn)
-                    human_sleep(2, 3)
-                    break
-                except TimeoutException:
-                    continue
-
-            # Look for identity dropdown
-            identity_sel = [
-                "//button[contains(@class,'identity-selector')]",
-                "//div[contains(@class,'share-creation-state')]//button",
-                "//span[contains(@class,'artdeco-dropdown__trigger')]",
-            ]
-            for sel in identity_sel:
-                try:
-                    dropdown = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable((By.XPATH, sel))
-                    )
-                    safe_click(self.driver, dropdown)
-                    human_sleep(1, 2)
-
-                    co = WebDriverWait(self.driver, 5).until(
-                        EC.element_to_be_clickable(
-                            (By.XPATH, f"//span[contains(text(),'{company_name}')]")
-                        )
-                    )
-                    safe_click(self.driver, co)
-                    human_sleep(2, 3)
-
-                    # Close the post dialog
-                    try:
-                        close = self.driver.find_element(
-                            By.XPATH, "//button[contains(@aria-label,'Dismiss')]"
-                        )
-                        close.click()
-                    except Exception:
-                        pass
-
-                    logger.info(f"✅ Switched via post-box to: {company_name}")
-                    return True
-                except TimeoutException:
-                    continue
-
-        except Exception as e:
-            logger.warning(f"⚠️ Post-box switch failed: {e}")
-
-        logger.warning("⚠️ Could not switch to company page — continuing as personal profile")
-        return False
-
-    # ── Like post ────────────────────────────────────────────────────────────
     def like_post(self) -> bool:
-        """
-        Like the main post on the current page.
-        Uses multiple selector strategies for 2025/2026 LinkedIn DOM.
-        """
-        logger.info("❤️ Attempting to like post…")
-        human_scroll(self.driver, 2)
-        human_sleep(2, 4)
+        logger.info("Attempting to like post...")
 
-        # LinkedIn 2025: like button is a <button> with aria-label like
-        # "React to <Name>'s post"  OR  class contains "react-button__trigger"
+        human_scroll(self.driver, 3)
+        time.sleep(random.uniform(2, 4))
+
+        self.driver.execute_script("""
+            document.querySelectorAll(
+                '.feed-shared-social-actions, [role="group"], .social-details__action-list,
+                 .main-feed-activity-card__social-actions'
+            ).forEach(el => el.scrollIntoView({block: 'center'}));
+        """)
+        time.sleep(random.uniform(2, 3))
+
         selectors = [
-            "//button[contains(@class,'reactions-react-button')]",
-            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'Like')]",
-            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'Like')]",
-            "//div[not(contains(@class,'comment'))]//button[contains(@aria-label,'React to')]",
-            "//button[contains(@aria-label,'React to this post')]",
-            "//button[contains(@aria-label,'Like this post')]",
-            "//button[contains(@class,'react-button__trigger')]",
-            "//button[.//span[normalize-space(text())='Like']]",
+            "//button[contains(@aria-label,'Like') and not(contains(@aria-label,'comment')) and not(contains(@aria-label,'Comment'))]",
+            "//button[contains(@aria-label,'React Like')]",
+            "//button[@data-control-name='react_to_post']",
         ]
 
-        like_btn = None
-        for sel in selectors:
+        post_btn = None
+        for selector in selectors:
             try:
-                candidates = self.driver.find_elements(By.XPATH, sel)
-                for btn in candidates:
-                    if not btn.is_displayed():
-                        continue
-                    pressed = btn.get_attribute("aria-pressed") or ""
-                    label   = (btn.get_attribute("aria-label") or "").lower()
-                    if pressed == "true" or "unlike" in label:
-                        logger.info("ℹ️ Post already liked")
-                        return True
-                    like_btn = btn
-                    break
-                if like_btn:
-                    logger.info(f"✅ Like button found via: {sel}")
-                    break
-            except StaleElementReferenceException:
-                continue
-            except Exception:
-                continue
-
-        if not like_btn:
-            try:
-                bars = self.driver.find_elements(
-                    By.XPATH,
-                    "//div[contains(@class,'social-action') or contains(@class,'feed-shared-social')]"
+                post_btn = WebDriverWait(self.driver, 12).until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
                 )
-                for bar in bars:
-                    btns = bar.find_elements(By.TAG_NAME, "button")
-                    for b in btns:
-                        if b.is_displayed():
-                            like_btn = b
-                            break
-                    if like_btn:
-                        break
+                logger.info("Like button found")
+                break
+            except TimeoutException:
+                continue
             except Exception:
-                pass
+                continue
 
-        if not like_btn:
-            try:
-                snippet = self.driver.find_element(
-                    By.XPATH, "//div[contains(@class,'social-action')]"
-                ).get_attribute("outerHTML")[:500]
-                logger.warning(f"❌ No like button found. HTML: {snippet}")
-            except Exception:
-                logger.warning("❌ No like button found on this page")
+        if not post_btn:
+            logger.warning("No post like button found")
             return False
 
+        pressed = post_btn.get_attribute("aria-pressed") or ""
+        label   = (post_btn.get_attribute("aria-label") or "").lower()
+        if pressed == "true" or "unlike" in label:
+            logger.info("Post already liked")
+            return True
+
         try:
-            safe_click(self.driver, like_btn)
-            human_sleep(2, 4)
-            logger.info("✅ Post liked!")
+            js_click(self.driver, post_btn)
+            time.sleep(random.uniform(3, 5))
+            logger.info("POST LIKED!")
             return True
         except Exception as e:
-            logger.error(f"❌ Click failed: {e}")
+            logger.error(f"Click failed: {e}")
             return False
 
-    # ── Like comments ────────────────────────────────────────────────────────
     def like_comments(self) -> bool:
-        """
-        Like ALL comments on the current post page.
-        Uses 2025/2026 LinkedIn comment DOM selectors.
-        """
-        logger.info("💬 Looking for comments to like…")
-        human_scroll(self.driver, 3)
-        human_sleep(3, 5)
+        logger.info("Looking for comments to like...")
+        human_pause(2, 4)
 
-        # Expand comments if needed
-        expand_selectors = [
+        for _ in range(4):
+            human_scroll(self.driver, 2)
+            time.sleep(random.uniform(2, 4))
+
+        for sel in [
             "//button[contains(@aria-label,'Load previous comments')]",
             "//button[contains(@aria-label,'See more comments')]",
-            "//button[contains(text(),'comments')]",
-        ]
-        for sel in expand_selectors:
+            "//button[contains(@aria-label,'View more comments')]",
+        ]:
             try:
                 btn = self.driver.find_element(By.XPATH, sel)
-                safe_click(self.driver, btn)
-                human_sleep(2, 3)
+                js_click(self.driver, btn)
+                time.sleep(random.uniform(2, 3))
                 break
             except Exception:
                 pass
 
         human_scroll(self.driver, 2)
-        human_sleep(2, 3)
+        time.sleep(random.uniform(2, 3))
 
-        comment_selectors = [
-            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'Like')]",
-            "//article[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'Like')]",
-            "//div[contains(@class,'comments-comment')]//button[contains(@class,'reactions-react-button')]",
-            "//button[contains(@aria-label,'React to') and contains(@aria-label,'comment')]",
-            "//button[contains(@aria-label,'Like') and contains(@aria-label,'comment')]",
+        like_selectors = [
+            "//button[contains(@aria-label,'React Like') and not(contains(@aria-label,'Unreact'))]",
+            "//button[contains(@aria-label,'Like') and contains(@aria-label,'comment') and not(contains(@aria-label,'Unlike'))]",
         ]
 
         all_btns = []
-        for sel in comment_selectors:
+        seen = set()
+
+        for selector in like_selectors:
             try:
-                found = self.driver.find_elements(By.XPATH, sel)
-                for b in found:
-                    if not b.is_displayed():
+                buttons = self.driver.find_elements(By.XPATH, selector)
+                logger.info(f"Found {len(buttons)} buttons via selector")
+
+                for btn in buttons:
+                    try:
+                        btn_id = f"{btn.location['x']}_{btn.location['y']}"
+                        if btn_id in seen:
+                            continue
+                        if not btn.is_displayed():
+                            continue
+                        aria   = (btn.get_attribute("aria-label") or "").lower()
+                        pressed = btn.get_attribute("aria-pressed")
+                        if pressed == "true" or "unreact" in aria or "unlike" in aria:
+                            continue
+                        all_btns.append(btn)
+                        seen.add(btn_id)
+                        logger.info(f"Target: '{btn.get_attribute('aria-label')[:60]}'")
+                    except Exception:
                         continue
-                    pressed = b.get_attribute("aria-pressed") or ""
-                    label   = (b.get_attribute("aria-label") or "").lower()
-                    if pressed == "true" or "unlike" in label:
-                        continue
-                    if b not in all_btns:
-                        all_btns.append(b)
+
                 if all_btns:
-                    logger.info(f"✅ Found comment buttons via: {sel}")
                     break
             except Exception:
                 continue
 
-        logger.info(f"📝 Found {len(all_btns)} comment like button(s)")
+        logger.info(f"Found {len(all_btns)} comment like button(s)")
 
         liked = 0
-        for btn in all_btns:          # ← no limit, like ALL comments
+        for i, btn in enumerate(all_btns):
             if self.stopped():
                 break
             try:
-                safe_click(self.driver, btn)
-                human_sleep(
-                    Config.COMMENT_MIN_WAIT,
-                    Config.COMMENT_MAX_WAIT
-                )
+                js_click(self.driver, btn)
+                time.sleep(random.uniform(Config.COMMENT_MIN_WAIT, Config.COMMENT_MAX_WAIT))
                 liked += 1
-                logger.info(f"✅ Comment {liked}/{len(all_btns)} liked")
+                logger.info(f"Comment {liked}/{len(all_btns)} liked")
             except StaleElementReferenceException:
                 continue
             except Exception as e:
-                logger.warning(f"⚠️ Comment like failed: {e}")
+                logger.warning(f"Comment like failed: {e}")
                 continue
 
-        logger.info(f"✅ {liked} comment(s) liked")
+        logger.info(f"{liked} comment(s) liked")
         return liked > 0
 
     def close(self):
         if self.driver:
             self.driver.quit()
-            logger.info("🔒 Browser closed")
+            logger.info("Browser closed")
 
-# ==================== MAIN BOT (called by app.py) ====================
+# ==================== MAIN BOT ====================
 class LinkedInCommentLiker:
-    def __init__(self, config, stop_event: threading.Event = None):
+    def __init__(self, config, stop_event=None):
         self.config     = config
         self.client     = None
         self.stop_event = stop_event or threading.Event()
@@ -488,12 +409,6 @@ class LinkedInCommentLiker:
         self.client.setup_driver()
         self.client.login(cookie_file=getattr(self.config, "COOKIE_FILE", "linkedin_session.pkl"))
 
-        company = getattr(self.config, "COMPANY_NAME", "").strip()
-        if company:
-            switched = self.client.switch_to_company(company)
-            if not switched:
-                logger.warning(f"⚠️ Proceeding as personal profile — '{company}' switch failed")
-
     def run(self):
         handler = GoogleSheetHandler(
             self.config.GOOGLE_CREDENTIALS_FILE,
@@ -501,18 +416,20 @@ class LinkedInCommentLiker:
         )
         rows = handler.read_file()
         if not rows:
-            logger.error("❌ No rows found in sheet")
+            logger.error("No rows found in sheet")
             return
 
+        company = getattr(self.config, "COMPANY_NAME", "").strip()
         processed = 0
+
         for i, row in enumerate(rows):
 
             if self.stop_event.is_set():
-                logger.info("⛔ Stopped by user")
+                logger.info("Stopped by user")
                 break
 
             if handler.is_row_done(i):
-                logger.info(f"⏭️ Row {i+1}: Already DONE — skipping")
+                logger.info(f"Row {i+1}: Already DONE - skipping")
                 continue
 
             post_url = str(
@@ -520,42 +437,71 @@ class LinkedInCommentLiker:
             ).strip()
 
             if not post_url or post_url.lower() == "nan":
-                logger.warning(f"Row {i+1}: No URL found")
+                logger.warning(f"Row {i+1}: No URL")
                 handler.update_status(i, "NO_URL")
                 continue
 
-            logger.info(f"\n{'='*55}\n[{i+1}/{len(rows)}] {post_url[:55]}…\n{'='*55}")
+            logger.info(f"\n{'='*55}\n[{i+1}/{len(rows)}] {post_url[:55]}\n{'='*55}")
 
             try:
-                logger.info(f"🌐 Opening post URL…")
+                # Go to feed first (prevents public/cold-join view on post URL)
+                logger.info("Navigating to feed first...")
+                self.client.driver.get("https://www.linkedin.com/feed/")
+                time.sleep(random.uniform(3, 5))
+
+                logger.info("Opening post URL...")
                 self.client.driver.get(post_url)
-                human_sleep(3, 5)           # was 8-12s
+                time.sleep(random.uniform(8, 12))
+
+                # Safety check
+                current_url = self.client.driver.current_url
+                if any(x in current_url for x in ["signup", "login", "cold-join", "authwall"]):
+                    logger.warning(f"Redirected to: {current_url} - session may have expired")
+                    handler.update_status(i, "SESSION_EXPIRED")
+                    continue
+
+                # Scroll social bar into view
+                self.client.driver.execute_script("""
+                    document.querySelectorAll(
+                        '.feed-shared-social-actions, [role="group"],
+                         .social-details__action-list,
+                         .main-feed-activity-card__social-actions'
+                    ).forEach(el => el.scrollIntoView({block: 'center'}));
+                """)
+                time.sleep(random.uniform(2, 3))
+
+                # Switch to company page if configured
+                profile_type = "PERSONAL"
+                if company:
+                    switched = self.client.switch_to_company(company)
+                    profile_type = "COMPANY" if switched else "PERSONAL"
+                    logger.info(f"Using {profile_type} profile")
 
                 post_liked     = self.client.like_post()
-                human_pause()               # now 1-2s, was 3-7s
+                human_pause(2, 4)
                 comments_liked = self.client.like_comments()
 
                 status = (
-                    "DONE"      if post_liked and comments_liked else
-                    "POST_ONLY" if post_liked                    else
-                    "FAILED"
+                    f"{profile_type}:DONE"      if post_liked and comments_liked else
+                    f"{profile_type}:POST_ONLY" if post_liked                    else
+                    f"{profile_type}:FAILED"
                 )
                 handler.update_status(i, status)
                 processed += 1
 
             except Exception as e:
-                logger.error(f"❌ Row {i+1} error: {e}")
+                logger.error(f"Row {i+1} error: {e}")
                 handler.update_status(i, "ERROR")
 
             if not self.stop_event.is_set() and i < len(rows) - 1:
                 delay = random.uniform(self.config.MIN_DELAY, self.config.MAX_DELAY)
-                logger.info(f"😴 Waiting {delay:.0f}s before next row…")
+                logger.info(f"Waiting {delay:.0f}s...")
                 for _ in range(int(delay)):
                     if self.stop_event.is_set():
                         break
                     time.sleep(1)
 
-        logger.info(f"\n🎉 Finished! {processed}/{len(rows)} processed")
+        logger.info(f"Finished! {processed}/{len(rows)} processed")
         if self.client:
             self.client.close()
 
