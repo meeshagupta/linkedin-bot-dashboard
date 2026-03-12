@@ -34,7 +34,7 @@ class Config:
     COMMENT_MAX_WAIT        = 2
     HEADLESS_MODE           = True
     LOG_FILE                = "bot_logs.txt"
-    COOKIE_FILE             = "linkedin_session.pkl"   # ← session persistence
+    COOKIE_FILE             = "linkedin_session.pkl"
 
 # ==================== LOGGER ====================
 logging.basicConfig(
@@ -134,13 +134,11 @@ class LinkedInClient:
 
     # ── Login ────────────────────────────────────────────────────────────────
     def login(self, cookie_file: str = "linkedin_session.pkl"):
-        # ── Step 1: try saved session ────────────────────────────────────────
         logger.info("🍪 Checking for saved session…")
         if SessionManager.load(self.driver, cookie_file):
             logger.info("✅ Resumed from saved session — no login needed!")
             return
 
-        # ── Step 2: fresh login ──────────────────────────────────────────────
         logger.info("🔐 No saved session — logging in with credentials…")
         self.driver.get("https://www.linkedin.com/login")
         human_sleep(2, 4)
@@ -162,10 +160,8 @@ class LinkedInClient:
         )
         if "checkpoint" in self.driver.current_url:
             raise RuntimeError(
-                "LinkedIn sent a verification challenge.\n"
-                "FIX: Run the bot ONCE locally (non-headless) on your own PC, "
-                "complete the verification manually, then upload the saved "
-                "linkedin_session.pkl file via the sidebar to skip login on cloud."
+                "LinkedIn sent a verification challenge. Run bot once locally, "
+                "complete verification, then upload linkedin_session.pkl."
             )
         logger.info("✅ Logged in!")
         human_sleep(2, 3)
@@ -319,16 +315,16 @@ class LinkedInClient:
         # LinkedIn 2025: like button is a <button> with aria-label like
         # "React to <Name>'s post"  OR  class contains "react-button__trigger"
         selectors = [
-            # Most reliable in 2025 — react button trigger
+            "//button[contains(@class,'reactions-react-button')]",
+            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'Like')]",
+            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'Like')]",
+            "//div[not(contains(@class,'comment'))]//button[contains(@aria-label,'React to')]",
+            "//button[contains(@aria-label,'React to this post')]",
+            "//button[contains(@aria-label,'Like this post')]",
             "//button[contains(@class,'react-button__trigger')]",
-            # aria-label pattern: "React to X's post"
-            "//button[contains(@aria-label,'React to') and contains(@aria-label,'post')]",
-            # Generic Like aria-label (older posts / reshares)
-            "//button[contains(@aria-label,'Like') and not(contains(@aria-label,'comment'))]",
-            # data-control-name
-            "//button[@data-control-name='react_to_post']",
-            # span with text Like inside a button (some feed variants)
-            "//button[.//span[text()='Like']]",
+            "//button[.//span[normalize-space(text())='Like']]",
         ]
 
         like_btn = None
@@ -336,14 +332,17 @@ class LinkedInClient:
             try:
                 candidates = self.driver.find_elements(By.XPATH, sel)
                 for btn in candidates:
-                    # Skip buttons that are already reacted
-                    pressed = btn.get_attribute("aria-pressed")
-                    if pressed == "true":
+                    if not btn.is_displayed():
+                        continue
+                    pressed = btn.get_attribute("aria-pressed") or ""
+                    label   = (btn.get_attribute("aria-label") or "").lower()
+                    if pressed == "true" or "unlike" in label:
                         logger.info("ℹ️ Post already liked")
                         return True
                     like_btn = btn
                     break
                 if like_btn:
+                    logger.info(f"✅ Like button found via: {sel}")
                     break
             except StaleElementReferenceException:
                 continue
@@ -351,17 +350,30 @@ class LinkedInClient:
                 continue
 
         if not like_btn:
-            # Last resort: find by SVG title or reaction container
             try:
-                like_btn = self.driver.find_element(
+                bars = self.driver.find_elements(
                     By.XPATH,
-                    "//div[contains(@class,'social-actions')]//button[1]"
+                    "//div[contains(@class,'social-action') or contains(@class,'feed-shared-social')]"
                 )
+                for bar in bars:
+                    btns = bar.find_elements(By.TAG_NAME, "button")
+                    for b in btns:
+                        if b.is_displayed():
+                            like_btn = b
+                            break
+                    if like_btn:
+                        break
             except Exception:
                 pass
 
         if not like_btn:
-            logger.warning("❌ No like button found on this page")
+            try:
+                snippet = self.driver.find_element(
+                    By.XPATH, "//div[contains(@class,'social-action')]"
+                ).get_attribute("outerHTML")[:500]
+                logger.warning(f"❌ No like button found. HTML: {snippet}")
+            except Exception:
+                logger.warning("❌ No like button found on this page")
             return False
 
         try:
@@ -401,37 +413,35 @@ class LinkedInClient:
         human_scroll(self.driver, 2)
         human_sleep(2, 3)
 
-        # LinkedIn 2025 comment like button selectors
         comment_selectors = [
-            # react-button inside a comment item
-            "//div[contains(@class,'comment') or contains(@class,'Comment')]"
-            "//button[contains(@class,'react-button__trigger')]",
-            # aria-label: "React to <Name>'s comment"
+            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'Like')]",
+            "//article[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'React')]",
+            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'Like')]",
+            "//div[contains(@class,'comments-comment')]//button[contains(@class,'reactions-react-button')]",
             "//button[contains(@aria-label,'React to') and contains(@aria-label,'comment')]",
-            # Older pattern
             "//button[contains(@aria-label,'Like') and contains(@aria-label,'comment')]",
-            # Generic: all react buttons on the page (post + comments), skip first (post)
-            "//button[contains(@class,'react-button__trigger')]",
         ]
 
         all_btns = []
         for sel in comment_selectors:
             try:
                 found = self.driver.find_elements(By.XPATH, sel)
-                # Filter out already-liked and the main post like button
                 for b in found:
-                    if b.get_attribute("aria-pressed") != "true" and b not in all_btns:
+                    if not b.is_displayed():
+                        continue
+                    pressed = b.get_attribute("aria-pressed") or ""
+                    label   = (b.get_attribute("aria-label") or "").lower()
+                    if pressed == "true" or "unlike" in label:
+                        continue
+                    if b not in all_btns:
                         all_btns.append(b)
                 if all_btns:
+                    logger.info(f"✅ Found comment buttons via: {sel}")
                     break
             except Exception:
                 continue
-
-        # If we got all react-buttons including the post button, skip the first one
-        if all_btns and "post" not in (all_btns[0].get_attribute("aria-label") or "").lower():
-            pass  # already comment buttons only
-        elif len(all_btns) > 1:
-            all_btns = all_btns[1:]  # skip post like button
 
         logger.info(f"📝 Found {len(all_btns)} comment like button(s)")
 
