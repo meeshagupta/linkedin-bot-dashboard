@@ -1,6 +1,6 @@
 """
 profile_bot.py — LinkedIn automation for PERSONAL profile accounts.
-Fixes: updated 2025/2026 LinkedIn DOM selectors, stop-flag support.
+Selectors and click logic taken from proven working local scripts (13.py / 14.py).
 """
 import time
 import random
@@ -13,9 +13,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
-from selenium.common.exceptions import (
-    TimeoutException, StaleElementReferenceException
-)
+from selenium.common.exceptions import TimeoutException, StaleElementReferenceException
 
 from chrome_utils import get_chrome_driver
 from session_manager import SessionManager
@@ -32,7 +30,7 @@ class Config:
     COMMENT_MAX_WAIT        = 2
     HEADLESS_MODE           = True
     LOG_FILE                = "bot_logs.txt"
-    COOKIE_FILE             = "linkedin_session.pkl"   # ← NEW: session persistence
+    COOKIE_FILE             = "linkedin_session.pkl"
 
 # ==================== LOGGER ====================
 logging.basicConfig(
@@ -43,32 +41,29 @@ logging.basicConfig(
 logger = logging.getLogger("ProfileBot")
 
 # ==================== STEALTH HELPERS ====================
-def human_sleep(a=0.3, b=0.8):
+def human_sleep(a=0.5, b=1.5):
     time.sleep(random.uniform(a, b))
 
-def human_pause():
-    t = random.uniform(1, 2)
-    logger.info(f"⏳ Pause {t:.1f}s")
+def human_pause(a=2, b=5):
+    t = random.uniform(a, b)
+    logger.info(f"Pause {t:.1f}s")
     time.sleep(t)
 
-def human_scroll(driver, times=2):
+def human_scroll(driver, times=3):
     for _ in range(times):
-        driver.execute_script(f"window.scrollBy(0, {random.randint(200,500)});")
-        time.sleep(random.uniform(0.2, 0.5))
+        driver.execute_script(f"window.scrollBy(0, {random.randint(200, 600)});")
+        time.sleep(random.uniform(0.3, 0.8))
 
 def human_type(element, text):
     for ch in text:
         element.send_keys(ch)
-        time.sleep(random.uniform(0.03, 0.08))
-    time.sleep(0.3)
+        time.sleep(random.uniform(0.05, 0.15))
+    time.sleep(0.5)
 
-def safe_click(driver, element):
-    driver.execute_script("arguments[0].scrollIntoView({block:'center',behavior:'smooth'});", element)
-    human_sleep(0.5, 1.0)
-    try:
-        ActionChains(driver).move_to_element(element).click().perform()
-    except Exception:
-        driver.execute_script("arguments[0].click();", element)
+def js_click(driver, element):
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", element)
+    time.sleep(random.uniform(0.3, 0.7))
+    driver.execute_script("arguments[0].click();", element)
 
 # ==================== GOOGLE SHEET ====================
 class GoogleSheetHandler:
@@ -80,7 +75,7 @@ class GoogleSheetHandler:
 
     def read_file(self):
         records = self.sheet.get_all_records()
-        logger.info(f"✅ Loaded {len(records)} rows")
+        logger.info(f"Loaded {len(records)} rows")
         return records
 
     def _status_col(self):
@@ -98,7 +93,7 @@ class GoogleSheetHandler:
                     row_index + 2, col,
                     f"{status} @ {datetime.now().strftime('%H:%M')}"
                 )
-                logger.info(f"📝 Row {row_index+2}: {status}")
+                logger.info(f"Row {row_index+2}: {status}")
         except Exception as e:
             logger.error(f"Sheet update error: {e}")
 
@@ -114,7 +109,7 @@ class GoogleSheetHandler:
 
 # ==================== LINKEDIN CLIENT ====================
 class LinkedInClient:
-    def __init__(self, email, password, headless=True, stop_event: threading.Event = None):
+    def __init__(self, email, password, headless=True, stop_event=None):
         self.email      = email
         self.password   = password
         self.headless   = headless
@@ -123,232 +118,194 @@ class LinkedInClient:
 
     def setup_driver(self):
         self.driver = get_chrome_driver(headless=self.headless)
-        logger.info("🚀 Chrome ready!")
+        logger.info("Chrome ready!")
 
     def stopped(self):
         return self.stop_event.is_set()
 
-    def login(self, cookie_file: str = "linkedin_session.pkl"):
-        # ── Step 1: try to restore a saved session (no login page hit) ──────
-        logger.info("🍪 Checking for saved session…")
+    def login(self, cookie_file="linkedin_session.pkl"):
+        logger.info("Checking for saved session...")
         if SessionManager.load(self.driver, cookie_file):
-            logger.info("✅ Resumed from saved session — no login needed!")
-            return
+            self.driver.get("https://www.linkedin.com/feed/")
+            time.sleep(5)
+            url = self.driver.current_url
+            if "feed" in url or "mynetwork" in url:
+                logger.info("Resumed from saved session - no login needed!")
+                return
+            logger.warning("Session cookie expired - doing fresh login...")
 
-        # ── Step 2: fresh email/password login ───────────────────────────────
-        logger.info("🔐 No saved session — logging in with credentials…")
+        logger.info("Logging in with credentials...")
         self.driver.get("https://www.linkedin.com/login")
-        human_sleep(2, 4)   # longer wait mimics a human arriving at the page
+        time.sleep(random.uniform(3, 5))
 
-        email_f = WebDriverWait(self.driver, 20).until(
+        email_f = WebDriverWait(self.driver, 30).until(
             EC.presence_of_element_located((By.ID, "username"))
         )
         human_type(email_f, self.email)
-        human_sleep(0.5, 1.0)
+        time.sleep(random.uniform(1, 2))
 
         pw_f = self.driver.find_element(By.ID, "password")
         human_type(pw_f, self.password)
-        human_sleep(0.5, 1.2)
+        time.sleep(random.uniform(1, 2))
 
         self.driver.find_element(By.XPATH, "//button[@type='submit']").click()
 
-        WebDriverWait(self.driver, 40).until(
+        WebDriverWait(self.driver, 60).until(
             EC.any_of(EC.url_contains("feed"), EC.url_contains("checkpoint"))
         )
         if "checkpoint" in self.driver.current_url:
             raise RuntimeError(
-                "LinkedIn sent a verification challenge.\n"
-                "FIX: Run the bot ONCE locally (non-headless) on your own PC, "
-                "complete the verification manually, then the bot will save the "
-                "session cookies automatically.  After that, upload the saved "
-                "linkedin_session.pkl file via the sidebar and cloud runs will "
-                "skip the login page entirely."
+                "LinkedIn verification required. "
+                "Run generate_session.py on your PC, complete verification, "
+                "then upload linkedin_session.pkl via the sidebar."
             )
 
-        logger.info("✅ Logged in!")
-        human_sleep(2, 3)
-
-        # Save cookies so the next run skips the login page
+        logger.info("Logged in!")
+        time.sleep(random.uniform(3, 5))
         SessionManager.save(self.driver, cookie_file)
-        logger.info("💾 Session cookies saved for future runs")
+        logger.info("Session saved for next run")
 
     def like_post(self) -> bool:
-        logger.info("❤️ Attempting to like post…")
+        logger.info("Attempting to like post...")
 
-        # Wait for page to fully load before scrolling
-        human_sleep(3, 5)
-        human_scroll(self.driver, 2)
-        human_sleep(2, 3)
+        human_scroll(self.driver, 3)
+        time.sleep(random.uniform(2, 4))
 
-        # LinkedIn 2025/2026 selectors — ordered from most to least specific
+        self.driver.execute_script("""
+            document.querySelectorAll(
+                '.feed-shared-social-actions, [role="group"], .social-details__action-list,
+                 .main-feed-activity-card__social-actions'
+            ).forEach(el => el.scrollIntoView({block: 'center'}));
+        """)
+        time.sleep(random.uniform(2, 3))
+
+        # Proven selectors from working scripts
         selectors = [
-            # New 2025 reaction button (most common)
-            "//button[contains(@class,'reactions-react-button')]",
-            # aria-label containing 'React' for the post (not comments)
-            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'React')]",
-            # Like specifically
-            "//div[contains(@class,'feed-shared-social-action-bar')]//button[contains(@aria-label,'Like')]",
-            "//div[contains(@class,'social-actions')]//button[contains(@aria-label,'Like')]",
-            # Fallback: any react/like button not inside a comment
-            "//div[not(contains(@class,'comment'))]//button[contains(@aria-label,'React to')]",
-            "//button[contains(@aria-label,'React to this post')]",
-            "//button[contains(@aria-label,'Like this post')]",
-            # Old class-based selectors as last resort
-            "//button[contains(@class,'react-button__trigger')]",
-            "//button[.//span[normalize-space(text())='Like']]",
+            "//button[contains(@aria-label,'Like') and not(contains(@aria-label,'comment')) and not(contains(@aria-label,'Comment'))]",
+            "//button[contains(@aria-label,'React Like')]",
+            "//button[@data-control-name='react_to_post']",
         ]
 
-        like_btn = None
-        for sel in selectors:
+        post_btn = None
+        for selector in selectors:
             try:
-                candidates = self.driver.find_elements(By.XPATH, sel)
-                for btn in candidates:
-                    # Skip hidden or zero-size buttons
-                    if not btn.is_displayed():
-                        continue
-                    # Already liked — nothing to do
-                    pressed = btn.get_attribute("aria-pressed") or ""
-                    label   = (btn.get_attribute("aria-label") or "").lower()
-                    if pressed == "true" or "unlike" in label:
-                        logger.info("ℹ️ Post already liked")
-                        return True
-                    like_btn = btn
-                    break
-                if like_btn:
-                    logger.info(f"✅ Like button found via: {sel}")
-                    break
-            except StaleElementReferenceException:
-                continue
-            except Exception:
-                continue
-
-        # Last-resort: first visible button in the social action bar
-        if not like_btn:
-            try:
-                bars = self.driver.find_elements(
-                    By.XPATH,
-                    "//div[contains(@class,'social-action') or contains(@class,'feed-shared-social')]"
+                post_btn = WebDriverWait(self.driver, 12).until(
+                    EC.element_to_be_clickable((By.XPATH, selector))
                 )
-                for bar in bars:
-                    btns = bar.find_elements(By.TAG_NAME, "button")
-                    for b in btns:
-                        if b.is_displayed():
-                            like_btn = b
-                            logger.info("⚠️ Using fallback: first button in social bar")
-                            break
-                    if like_btn:
-                        break
+                logger.info("Like button found")
+                break
+            except TimeoutException:
+                continue
             except Exception:
-                pass
+                continue
 
-        if not like_btn:
-            # Log page source snippet to help diagnose future selector changes
-            try:
-                snippet = self.driver.find_element(
-                    By.XPATH, "//div[contains(@class,'social-action') or contains(@class,'feed-shared')]"
-                ).get_attribute("outerHTML")[:500]
-                logger.warning(f"❌ No like button found. Social bar HTML: {snippet}")
-            except Exception:
-                logger.warning("❌ No like button found on this page")
+        if not post_btn:
+            logger.warning("No post like button found")
             return False
 
+        pressed = post_btn.get_attribute("aria-pressed") or ""
+        label   = (post_btn.get_attribute("aria-label") or "").lower()
+        if pressed == "true" or "unlike" in label:
+            logger.info("Post already liked")
+            return True
+
         try:
-            safe_click(self.driver, like_btn)
-            human_sleep(2, 4)
-            logger.info("✅ Post liked!")
+            js_click(self.driver, post_btn)
+            time.sleep(random.uniform(3, 5))
+            logger.info("POST LIKED!")
             return True
         except Exception as e:
-            logger.error(f"❌ Click failed: {e}")
+            logger.error(f"Click failed: {e}")
             return False
 
     def like_comments(self) -> bool:
-        logger.info("💬 Looking for comments to like…")
-        human_scroll(self.driver, 3)
-        human_sleep(3, 5)
+        logger.info("Looking for comments to like...")
+        human_pause(2, 4)
 
-        # Expand comments if collapsed
-        expand_selectors = [
+        for _ in range(4):
+            human_scroll(self.driver, 2)
+            time.sleep(random.uniform(2, 4))
+
+        for sel in [
             "//button[contains(@aria-label,'Load previous comments')]",
             "//button[contains(@aria-label,'See more comments')]",
             "//button[contains(@aria-label,'View more comments')]",
-            "//button[contains(text(),'comments')]",
-        ]
-        for sel in expand_selectors:
+        ]:
             try:
                 btn = self.driver.find_element(By.XPATH, sel)
-                safe_click(self.driver, btn)
-                human_sleep(2, 3)
+                js_click(self.driver, btn)
+                time.sleep(random.uniform(2, 3))
                 break
             except Exception:
                 pass
 
-        human_scroll(self.driver, 3)
-        human_sleep(2, 3)
+        human_scroll(self.driver, 2)
+        time.sleep(random.uniform(2, 3))
 
-        # LinkedIn 2025/2026 comment like button selectors
-        comment_selectors = [
-            # Most specific — reaction button inside a comment block
-            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'Like')]",
-            "//article[contains(@class,'comments-comment-item')]//button[contains(@aria-label,'React')]",
-            # Slightly broader
-            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'React')]",
-            "//div[contains(@class,'comment-item')]//button[contains(@aria-label,'Like')]",
-            # New 2025 reaction class inside comments
-            "//div[contains(@class,'comments-comment')]//button[contains(@class,'reactions-react-button')]",
-            # Fallback: any React button that mentions 'comment' in aria-label
-            "//button[contains(@aria-label,'React to') and contains(@aria-label,'comment')]",
-            "//button[contains(@aria-label,'Like') and contains(@aria-label,'comment')]",
+        # Proven working selectors from local scripts
+        like_selectors = [
+            "//button[contains(@aria-label,'React Like') and not(contains(@aria-label,'Unreact'))]",
+            "//button[contains(@aria-label,'Like') and contains(@aria-label,'comment') and not(contains(@aria-label,'Unlike'))]",
         ]
 
         all_btns = []
-        for sel in comment_selectors:
+        seen = set()
+
+        for selector in like_selectors:
             try:
-                found = self.driver.find_elements(By.XPATH, sel)
-                for b in found:
-                    if not b.is_displayed():
+                buttons = self.driver.find_elements(By.XPATH, selector)
+                logger.info(f"Found {len(buttons)} buttons via selector")
+
+                for btn in buttons:
+                    try:
+                        btn_id = f"{btn.location['x']}_{btn.location['y']}"
+                        if btn_id in seen:
+                            continue
+                        if not btn.is_displayed():
+                            continue
+                        aria   = (btn.get_attribute("aria-label") or "").lower()
+                        pressed = btn.get_attribute("aria-pressed")
+                        if pressed == "true" or "unreact" in aria or "unlike" in aria:
+                            continue
+                        all_btns.append(btn)
+                        seen.add(btn_id)
+                        logger.info(f"Target: '{btn.get_attribute('aria-label')[:60]}'")
+                    except Exception:
                         continue
-                    pressed = b.get_attribute("aria-pressed") or ""
-                    label   = (b.get_attribute("aria-label") or "").lower()
-                    if pressed == "true" or "unlike" in label:
-                        continue   # already liked
-                    if b not in all_btns:
-                        all_btns.append(b)
+
                 if all_btns:
-                    logger.info(f"✅ Found buttons via: {sel}")
                     break
             except Exception:
                 continue
 
-        logger.info(f"📝 Found {len(all_btns)} comment like button(s)")
+        logger.info(f"Found {len(all_btns)} comment like button(s)")
 
         liked = 0
-        for btn in all_btns:
+        for i, btn in enumerate(all_btns):
             if self.stopped():
                 break
             try:
-                safe_click(self.driver, btn)
-                human_sleep(Config.COMMENT_MIN_WAIT, Config.COMMENT_MAX_WAIT)
+                js_click(self.driver, btn)
+                time.sleep(random.uniform(Config.COMMENT_MIN_WAIT, Config.COMMENT_MAX_WAIT))
                 liked += 1
-                logger.info(f"✅ Comment {liked}/{len(all_btns)} liked")
+                logger.info(f"Comment {liked}/{len(all_btns)} liked")
             except StaleElementReferenceException:
                 continue
             except Exception as e:
-                logger.warning(f"⚠️ Comment like failed: {e}")
+                logger.warning(f"Comment like failed: {e}")
                 continue
 
-        logger.info(f"✅ {liked} comment(s) liked")
+        logger.info(f"{liked} comment(s) liked")
         return liked > 0
 
     def close(self):
         if self.driver:
             self.driver.quit()
-            logger.info("🔒 Browser closed")
+            logger.info("Browser closed")
 
-# ==================== MAIN BOT (called by app.py) ====================
+# ==================== MAIN BOT ====================
 class LinkedInCommentLiker:
-    def __init__(self, config, stop_event: threading.Event = None):
+    def __init__(self, config, stop_event=None):
         self.config     = config
         self.client     = None
         self.stop_event = stop_event or threading.Event()
@@ -370,18 +327,18 @@ class LinkedInCommentLiker:
         )
         rows = handler.read_file()
         if not rows:
-            logger.error("❌ No rows found in sheet")
+            logger.error("No rows found in sheet")
             return
 
         processed = 0
         for i, row in enumerate(rows):
 
             if self.stop_event.is_set():
-                logger.info("⛔ Stopped by user")
+                logger.info("Stopped by user")
                 break
 
             if handler.is_row_done(i):
-                logger.info(f"⏭️ Row {i+1}: Already DONE — skipping")
+                logger.info(f"Row {i+1}: Already DONE - skipping")
                 continue
 
             post_url = str(
@@ -393,15 +350,39 @@ class LinkedInCommentLiker:
                 handler.update_status(i, "NO_URL")
                 continue
 
-            logger.info(f"\n{'='*55}\n[{i+1}/{len(rows)}] {post_url[:55]}…\n{'='*55}")
+            logger.info(f"\n{'='*55}\n[{i+1}/{len(rows)}] {post_url[:55]}\n{'='*55}")
 
             try:
-                logger.info(f"🌐 Opening post URL…")
+                # CRITICAL: Go to feed first before post URL.
+                # This ensures LinkedIn serves the logged-in version of the post,
+                # not the public cold-join page (which has no like button).
+                logger.info("Navigating to feed first...")
+                self.client.driver.get("https://www.linkedin.com/feed/")
+                time.sleep(random.uniform(3, 5))
+
+                logger.info("Opening post URL...")
                 self.client.driver.get(post_url)
-                human_sleep(3, 5)           # was 8-12s
+                time.sleep(random.uniform(8, 12))
+
+                # Safety check - make sure we're not on a login/signup page
+                current_url = self.client.driver.current_url
+                if any(x in current_url for x in ["signup", "login", "cold-join", "authwall"]):
+                    logger.warning(f"Redirected to: {current_url} - session may have expired")
+                    handler.update_status(i, "SESSION_EXPIRED")
+                    continue
+
+                # Scroll social bar into view
+                self.client.driver.execute_script("""
+                    document.querySelectorAll(
+                        '.feed-shared-social-actions, [role="group"],
+                         .social-details__action-list,
+                         .main-feed-activity-card__social-actions'
+                    ).forEach(el => el.scrollIntoView({block: 'center'}));
+                """)
+                time.sleep(random.uniform(2, 3))
 
                 post_liked     = self.client.like_post()
-                human_pause()               # now 1-2s
+                human_pause(2, 4)
                 comments_liked = self.client.like_comments()
 
                 status = (
@@ -413,18 +394,18 @@ class LinkedInCommentLiker:
                 processed += 1
 
             except Exception as e:
-                logger.error(f"❌ Row {i+1} error: {e}")
+                logger.error(f"Row {i+1} error: {e}")
                 handler.update_status(i, "ERROR")
 
             if not self.stop_event.is_set() and i < len(rows) - 1:
                 delay = random.uniform(self.config.MIN_DELAY, self.config.MAX_DELAY)
-                logger.info(f"😴 Waiting {delay:.0f}s…")
+                logger.info(f"Waiting {delay:.0f}s...")
                 for _ in range(int(delay)):
                     if self.stop_event.is_set():
                         break
                     time.sleep(1)
 
-        logger.info(f"\n🎉 Finished! {processed}/{len(rows)} processed")
+        logger.info(f"Finished! {processed}/{len(rows)} processed")
         if self.client:
             self.client.close()
 
