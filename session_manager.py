@@ -1,5 +1,6 @@
 """
 session_manager.py — Save and restore LinkedIn session cookies.
+Handles www vs non-www domain mismatch between PC-generated and cloud-loaded cookies.
 """
 import os
 import pickle
@@ -19,7 +20,7 @@ class SessionManager:
             cookies = driver.get_cookies()
             with open(path, "wb") as f:
                 pickle.dump(cookies, f)
-            logger.info(f"💾 Session saved → {path}  ({len(cookies)} cookies)")
+            logger.info(f"Session saved -> {path}  ({len(cookies)} cookies)")
             return True
         except Exception as e:
             logger.error(f"Session save failed: {e}")
@@ -28,44 +29,75 @@ class SessionManager:
     @staticmethod
     def load(driver, path: str = COOKIE_FILE_DEFAULT) -> bool:
         if not os.path.exists(path):
-            logger.info("No saved session found — will do fresh login.")
+            logger.info("No saved session found - will do fresh login.")
             return False
 
         try:
-            driver.get("https://www.linkedin.com")
-            time.sleep(3)   # wait for page to settle before adding cookies
-
             with open(path, "rb") as f:
                 cookies = pickle.load(f)
 
-            for cookie in cookies:
-                cookie.pop("expiry", None)
+            logger.info(f"Loaded {len(cookies)} cookies from file")
+
+            # Set cookies on BOTH domains to handle www vs non-www mismatch
+            # LinkedIn uses both linkedin.com and www.linkedin.com
+            for base_url in [
+                "https://www.linkedin.com",
+                "https://linkedin.com",
+            ]:
                 try:
-                    driver.add_cookie(cookie)
+                    driver.get(base_url)
+                    time.sleep(2)
+
+                    for cookie in cookies:
+                        c = cookie.copy()
+                        c.pop("expiry", None)
+                        # Force domain to match current base_url
+                        if "linkedin.com" in c.get("domain", ""):
+                            c["domain"] = ".linkedin.com"  # dot prefix = all subdomains
+                        try:
+                            driver.add_cookie(c)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
+            # Now navigate to feed and check if truly logged in
             driver.get("https://www.linkedin.com/feed/")
-            
-            # Wait longer — LinkedIn feed can be slow to load on cloud
-            for _ in range(15):   # up to 15 seconds
-                time.sleep(1)
-                url = driver.current_url
-                if "feed" in url or "mynetwork" in url or "in/" in url:
-                    logger.info("✅ Session restored from cookies — skipped login page!")
-                    return True
-                if "login" in url or "checkpoint" in url:
-                    logger.warning("⚠️ Cookies loaded but LinkedIn redirected to login — session expired.")
-                    return False
+            time.sleep(5)
 
-            # Final check after waiting
+            # Check URL first
             url = driver.current_url
-            if "feed" in url or "mynetwork" in url:
-                logger.info("✅ Session restored from cookies!")
-                return True
-            else:
-                logger.warning(f"⚠️ Session check failed — current URL: {url}")
+            if "login" in url or "checkpoint" in url or "authwall" in url:
+                logger.warning("Session load: redirected to login page - session expired")
                 return False
+
+            # Check for actual logged-in page elements (not just URL)
+            # LinkedIn feed shows a nav bar with user profile when logged in
+            page_source = driver.page_source
+            logged_in_indicators = [
+                "feed-identity-module",     # profile card on feed
+                "global-nav__me",           # nav bar profile icon
+                "ember-view",               # LinkedIn's Ember app (only loads when logged in)
+                "mynetwork",                # network tab only visible logged in
+            ]
+
+            for indicator in logged_in_indicators:
+                if indicator in page_source:
+                    logger.info(f"Session confirmed logged in (found: {indicator})")
+                    return True
+
+            # If none found but URL looks ok, check one more time after extra wait
+            if "feed" in url:
+                time.sleep(5)
+                page_source = driver.page_source
+                for indicator in logged_in_indicators:
+                    if indicator in page_source:
+                        logger.info(f"Session confirmed on second check (found: {indicator})")
+                        return True
+
+            logger.warning(f"Session loaded but page indicators not found. URL: {url}")
+            logger.warning("Cookies may be expired - will attempt fresh login")
+            return False
 
         except Exception as e:
             logger.error(f"Session load failed: {e}")
@@ -75,4 +107,4 @@ class SessionManager:
     def delete(path: str = COOKIE_FILE_DEFAULT):
         if os.path.exists(path):
             os.remove(path)
-            logger.info(f"🗑 Session file deleted: {path}")
+            logger.info(f"Session file deleted: {path}")
