@@ -18,6 +18,7 @@ from selenium.common.exceptions import (
 )
 
 from chrome_utils import get_chrome_driver
+from session_manager import SessionManager
 
 # ==================== CONFIG ====================
 class Config:
@@ -31,6 +32,7 @@ class Config:
     COMMENT_MAX_WAIT        = 2
     HEADLESS_MODE           = True
     LOG_FILE                = "bot_logs.txt"
+    COOKIE_FILE             = "linkedin_session.pkl"   # ← NEW: session persistence
 
 # ==================== LOGGER ====================
 logging.basicConfig(
@@ -126,18 +128,27 @@ class LinkedInClient:
     def stopped(self):
         return self.stop_event.is_set()
 
-    def login(self):
-        logger.info("🔐 Logging in as personal profile…")
+    def login(self, cookie_file: str = "linkedin_session.pkl"):
+        # ── Step 1: try to restore a saved session (no login page hit) ──────
+        logger.info("🍪 Checking for saved session…")
+        if SessionManager.load(self.driver, cookie_file):
+            logger.info("✅ Resumed from saved session — no login needed!")
+            return
+
+        # ── Step 2: fresh email/password login ───────────────────────────────
+        logger.info("🔐 No saved session — logging in with credentials…")
         self.driver.get("https://www.linkedin.com/login")
-        human_sleep(1, 2)
+        human_sleep(2, 4)   # longer wait mimics a human arriving at the page
 
         email_f = WebDriverWait(self.driver, 20).until(
             EC.presence_of_element_located((By.ID, "username"))
         )
         human_type(email_f, self.email)
+        human_sleep(0.5, 1.0)
 
         pw_f = self.driver.find_element(By.ID, "password")
         human_type(pw_f, self.password)
+        human_sleep(0.5, 1.2)
 
         self.driver.find_element(By.XPATH, "//button[@type='submit']").click()
 
@@ -145,9 +156,21 @@ class LinkedInClient:
             EC.any_of(EC.url_contains("feed"), EC.url_contains("checkpoint"))
         )
         if "checkpoint" in self.driver.current_url:
-            raise RuntimeError("LinkedIn verification required — please verify manually first.")
+            raise RuntimeError(
+                "LinkedIn sent a verification challenge.\n"
+                "FIX: Run the bot ONCE locally (non-headless) on your own PC, "
+                "complete the verification manually, then the bot will save the "
+                "session cookies automatically.  After that, upload the saved "
+                "linkedin_session.pkl file via the sidebar and cloud runs will "
+                "skip the login page entirely."
+            )
+
         logger.info("✅ Logged in!")
         human_sleep(2, 3)
+
+        # Save cookies so the next run skips the login page
+        SessionManager.save(self.driver, cookie_file)
+        logger.info("💾 Session cookies saved for future runs")
 
     def like_post(self) -> bool:
         logger.info("❤️ Attempting to like post…")
@@ -285,7 +308,7 @@ class LinkedInCommentLiker:
             stop_event = self.stop_event,
         )
         self.client.setup_driver()
-        self.client.login()
+        self.client.login(cookie_file=getattr(self.config, "COOKIE_FILE", "linkedin_session.pkl"))
 
     def run(self):
         handler = GoogleSheetHandler(
