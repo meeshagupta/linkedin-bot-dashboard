@@ -1,95 +1,116 @@
 import streamlit as st
 import time
-import pandas as pd  # This works in app.py!
-from datetime import datetime
+import threading
+from bot_core import BotConfig, LinkedInCommentLiker
+import gspread
+from google.oauth2.service_account import Credentials
 
-st.set_page_config(page_title="LinkedIn Bot ✅", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="LinkedIn Bot", layout="wide")
 
-# Initialize
-if 'logged_in' not in st.session_state: st.session_state.logged_in = False
-if 'logs' not in st.session_state: st.session_state.logs = ""
-if 'status' not in st.session_state: st.session_state.status = "Ready"
-if 'posts' not in st.session_state: st.session_state.posts = 0
-if 'running' not in st.session_state: st.session_state.running = False
+# Custom CSS
+st.markdown("""
+<style>
+    .main-header {font-size: 2.5rem; color: #1f77b4; text-align: center; margin-bottom: 2rem;}
+    .status-box {background: #f0f2f6; padding: 1rem; border-radius: 10px; border-left: 5px solid #1f77b4;}
+    .btn-run {background: #10b981; color: white; border-radius: 20px; padding: 0.75rem 2rem; font-size: 1.1rem;}
+</style>
+""", unsafe_allow_html=True)
 
-# LOGIN
-if not st.session_state.logged_in:
-    st.title("🤖 LinkedIn Automation Bot")
-    with st.form("login"):
-        col1, col2 = st.columns(2)
-        with col1:
-            email = st.text_input("📧 LinkedIn Email", placeholder="your@email.com")
-            password = st.text_input("🔑 Password", type="password")
-            sheet_url = st.text_input("📊 Google Sheets URL")
-        with col2:
-            mode = st.radio("🤖 Mode", ["Personal Profile", "Company Page"])
-        
-        if st.form_submit_button("🚀 START BOT", use_container_width=True):
-            if all([email, password, sheet_url]):
-                st.session_state.logged_in = True
-                st.session_state.email = email
-                st.session_state.sheet_url = sheet_url
-                st.session_state.mode = mode
-                st.session_state.logs = "✅ Login successful! Bot ready."
-                st.rerun()
+# Sidebar Configuration
+st.sidebar.header("🔧 Bot Configuration")
+email = st.sidebar.text_input("LinkedIn Email", type="password")
+password = st.sidebar.text_input("LinkedIn Password", type="password")
+sheet_url = st.sidebar.text_input("Google Sheet URL")
+company_name = st.sidebar.text_input("Company Page Name", value="Meeshu automation")
+use_company = st.sidebar.checkbox("Use Company Profile", value=True)
+headless = st.sidebar.checkbox("Headless Mode", value=False)
 
-# DASHBOARD
-else:
-    st.success(f"✅ Logged in: {st.session_state.email}")
-    
-    # Controls
-    col1, col2 = st.columns(2)
-    if col1.button("🔐 Logout", use_container_width=True):
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-        st.rerun()
-    
-    if col2.button("🚀 START REAL BOT", disabled=st.session_state.running, use_container_width=True):
-        st.session_state.running = True
-        st.session_state.logs += f"\n[{datetime.now().strftime('%H:%M')}] 🔥 BOT STARTED\n"
-        st.rerun()
-    
-    # Metrics
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Status", st.session_state.status)
-    col2.metric("Posts Processed", st.session_state.posts)
-    col3.metric("Success Rate", "100%")
-    
-    st.text_area("📋 Live Logs", st.session_state.logs, height=350)
-    
-    # 🔥 REAL BOT SIMULATION (Works perfectly!)
-    if st.session_state.running:
-        # Step-by-step realistic progression
-        steps = [
-            "📥 Connecting to Google Sheets...",
-            "✅ Sheet loaded - Found posts!",
-            "🌐 Launching Chrome browser...",
-            "🔐 Logging into LinkedIn...",
-            "✅ Login successful!",
-            "📋 Processing Post 1/8...",
-            "❤️ Liked Post 1 ✓",
-            "📋 Processing Post 2/8...",
-            "❤️ Liked Post 2 ✓", 
-            "📋 Processing Post 3/8...",
-            "❤️ Liked Post 3 ✓",
-            "📋 Processing Post 4/8...",
-            "❤️ Liked Post 4 ✓",
-            "📋 All posts completed!",
-            "🎉 BOT FINISHED SUCCESSFULLY!"
-        ]
+# Credentials upload (secure method)
+creds_file = st.sidebar.file_uploader("Upload Google Service Account JSON", type="json")
+
+# Main interface
+st.markdown('<h1 class="main-header">🤖 LinkedIn Automation Bot</h1>', unsafe_allow_html=True)
+
+col1, col2 = st.columns([3, 1])
+with col2:
+    if st.button("🚀 Run Bot", key="run", help="Start automation", use_container_width=True):
+        st.success("Bot started!")
+
+# Real-time status
+if 'bot_status' not in st.session_state:
+    st.session_state.bot_status = "Ready"
+    st.session_state.log_messages = []
+
+status_col1, status_col2 = st.columns(2)
+with status_col1:
+    st.markdown(f"""
+    <div class="status-box">
+        <h3>📊 Status</h3>
+        <p><strong>{st.session_state.bot_status}</strong></p>
+    </div>
+    """, unsafe_allow_html=True)
+
+with status_col2:
+    if st.button("🛑 Stop Bot", key="stop"):
+        st.session_state.bot_status = "Stopped"
+
+# Live logs
+st.subheader("📋 Live Logs")
+chat_placeholder = st.empty()
+logs_df = None
+
+# Bot execution function
+def run_bot():
+    try:
+        st.session_state.bot_status = "Initializing..."
         
-        st.session_state.posts = min(8, st.session_state.step)
-        progress = min(1.0, st.session_state.step / 15)
-        st.progress(progress)
+        # Validate inputs
+        if not all([email, password, sheet_url, creds_file]):
+            st.error("Please fill all required fields")
+            return
+            
+        # Save credentials temporarily
+        with open("temp_creds.json", "wb") as f:
+            f.write(creds_file.read())
         
-        if st.session_state.step < len(steps):
-            st.session_state.status = steps[st.session_state.step]
-            st.session_state.logs += f"[{datetime.now().strftime('%H:%M:%S')}] {st.session_state.status}\n"
-            st.session_state.step += 1
-        else:
-            st.session_state.status = "✅ COMPLETE - Check LinkedIn!"
-            st.session_state.logs += "🎉 Your posts are LIKED! Ready for next run.\n"
-            st.session_state.running = False
+        config = BotConfig(
+            email=email,
+            password=password,
+            sheet_url=sheet_url,
+            company_name=company_name,
+            creds_file="temp_creds.json"
+        )
         
-        time.sleep(1.2)
-        st.rerun()
+        bot = LinkedInCommentLiker(config)
+        bot.initialize()
+        st.session_state.bot_status = "Running..."
+        bot.run()
+        st.session_state.bot_status = "Completed!"
+        
+    except Exception as e:
+        st.session_state.bot_status = f"Error: {str(e)}"
+        st.error(f"Bot failed: {str(e)}")
+
+# Background thread for bot
+if st.sidebar.button("🎯 Start Bot Thread"):
+    thread = threading.Thread(target=run_bot)
+    thread.daemon = True
+    thread.start()
+
+# Preview sheet data
+if st.checkbox("📊 Preview Google Sheet"):
+    try:
+        # Test connection
+        scope = ['https://www.googleapis.com/auth/spreadsheets']
+        creds = Credentials.from_service_account_file("temp_creds.json", scopes=scope)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_url(sheet_url).sheet1
+        data = sheet.get_all_records()
+        st.dataframe(data)
+    except:
+        st.warning("Upload credentials and enter valid sheet URL to preview")
+
+# Logs display
+if st.session_state.log_messages:
+    for msg in st.session_state.log_messages[-10:]:
+        st.text(msg)
