@@ -103,8 +103,70 @@ class SessionManager:
             logger.error(f"Session load failed: {e}")
             return False
 
-    @staticmethod
-    def delete(path: str = COOKIE_FILE_DEFAULT):
-        if os.path.exists(path):
-            os.remove(path)
-            logger.info(f"Session file deleted: {path}")
+   @staticmethod
+   def load(driver, path: str = COOKIE_FILE_DEFAULT) -> bool:
+       if not os.path.exists(path):
+           logger.info("No saved session found - will do fresh login.")
+           return False
+
+       try:
+           with open(path, "rb") as f:
+               cookies = pickle.load(f)
+
+           logger.info(f"Loaded {len(cookies)} cookies from file")
+
+           # Set cookies on BOTH domains
+           for base_url in ["https://www.linkedin.com", "https://linkedin.com"]:
+               try:
+                   driver.get(base_url)
+                   time.sleep(2)
+
+                   for cookie in cookies:
+                       c = cookie.copy()
+                       c.pop("expiry", None)
+                       if "linkedin.com" in c.get("domain", ""):
+                           c["domain"] = ".linkedin.com"
+                       try:
+                           driver.add_cookie(c)
+                       except Exception:
+                           pass
+               except Exception:
+                   pass
+
+           # Navigate & validate (existing code)
+           driver.get("https://www.linkedin.com/feed/")
+           time.sleep(8)  # Longer wait for full load
+
+           url = driver.current_url
+           if "login" in url or "checkpoint" in url or "authwall" in url:
+               logger.warning("Session expired - will refresh")
+               return False
+
+           page_source = driver.page_source.lower()
+           logged_in_indicators = [
+               "feed-identity-module",
+               "global-nav__me", 
+               "ember-view",
+               "mynetwork",
+               "voyager-feed",  # ← NEW: Reliable feed indicator
+           ]
+
+           for indicator in logged_in_indicators:
+               if indicator in page_source:
+                   logger.info(f"✅ Session valid (found: {indicator})")
+                   return True
+
+           # FINAL CHECK: Look for profile dropdown
+           try:
+               driver.find_element("xpath", "//button[contains(@aria-label, 'Open profile')]")
+               logger.info("✅ Profile menu found - session valid!")
+               return True
+           except:
+               pass
+
+           logger.warning("Session weak - will refresh")
+           return False
+
+       except Exception as e:
+           logger.error(f"Session load failed: {e}")
+           return False
