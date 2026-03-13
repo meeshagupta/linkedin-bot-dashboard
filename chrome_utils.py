@@ -80,7 +80,11 @@ def get_chrome_driver(headless: bool = False):
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--disable-software-rasterizer")
-    options.add_argument("--single-process")          # ← KEY fix for container crash
+    options.add_argument("--disable-setuid-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--no-zygote")          # better for containers than --single-process
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--memory-pressure-off")
     options.add_argument("--disable-extensions")
     options.add_argument("--disable-infobars")
     options.add_argument("--disable-notifications")
