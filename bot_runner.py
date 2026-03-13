@@ -2,7 +2,7 @@ import tempfile
 import os
 import logging
 from 13 import Config as ConfigCompany, LinkedInCommentLiker as BotCompany
-from 14 import Config as ConfigPersonal, LinkedInCommentLiker as BotPersonal
+from New11(GSHEET) import Config as ConfigPersonal, LinkedInCommentLiker as BotPersonal
 
 class LinkedInBotRunner:
     def __init__(self, linkedin_email, linkedin_password, gsheet_url, profile_mode="Personal", 
