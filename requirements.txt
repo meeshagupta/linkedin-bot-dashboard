@@ -6,6 +6,11 @@ google-auth>=2.25.0
 google-auth-oauthlib>=1.0.0
 google-auth-httplib2>=0.1.0
 pandas>=2.0.0
+gspread_dataframe>=3.0.0
+oauth2client>=4.1.3
+
+
+
 
 
 
