@@ -71,6 +71,8 @@ else:
     if col2.button("⏹️ Stop", disabled=not st.session_state.running):
         st.session_state.running = False
     
+    # FIXED: Define col1, col2, col3 properly
+    col1, col2, col3 = st.columns(3)
     col1.metric("Status", st.session_state.status)
     col2.metric("Posts", st.session_state.posts)
     col3.metric("Success", f"{st.session_state.success}%")
